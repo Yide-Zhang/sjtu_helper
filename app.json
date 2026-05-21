@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "141f3f7b-5cb8-496f-94b2-1fc9fc87b215"
+      }
+    },
+    "android": {
+      "package": "com.yidezhang.sjtu_helper"
+    }
+  }
+}
