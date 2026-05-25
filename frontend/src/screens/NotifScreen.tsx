@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList, ActivityIndicator, RefreshControl, Dimensions, Animated, Alert, Modal } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, FlatList, ActivityIndicator, RefreshControl, Dimensions, Animated, Modal } from 'react-native';
+import { AlertModal, useAlertModal } from '../components/AlertModal';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { fetchJwcNoticeList, fetchJwcNoticeDetail, JwcNotice, extractXuanKeMeta, parseXuanKeContent, parsePingJiaoEndTime } from '../api/jwc';
 import { fetchIsjtuNotices, IsjtuNotice } from '../api/isjtu';
@@ -159,6 +160,7 @@ function getDateStr(week: number, dayStr: string, startDate: Date): string {
 type NotifTab = 'jwc' | 'isjtu';
 
 export const NotifScreen = ({ navigation }: any) => {
+  const { showAlert, alertProps } = useAlertModal();
   const insets = useSafeAreaInsets();
   const [tab, setTab] = useState<NotifTab>('jwc');
   const [jwcNotices, setJwcNotices] = useState<JwcNotice[]>([]);
@@ -393,7 +395,7 @@ export const NotifScreen = ({ navigation }: any) => {
   const showTodoModal = useCallback((notice: JwcNotice, rounds: { round: string; start: string; end: string; startWeek: number; endWeek: number }[]) => {
     const now = Date.now();
     const future = rounds.filter(r => new Date(r.start).getTime() > now);
-    if (future.length === 0) { Alert.alert('提示', '所有轮次均已开始，无需创建待办'); return; }
+    if (future.length === 0) { showAlert({ title: '提示', message: '所有轮次均已开始，无需创建待办', icon: 'info', simple: true }); return; }
     setTodoRounds(future.map(r => ({ round: r.round, start: r.start })));
     setTodoNotice(notice);
     setTodoModalVisible(true);
@@ -402,7 +404,7 @@ export const NotifScreen = ({ navigation }: any) => {
   const showPingJiaoTodo = useCallback((notice: JwcNotice) => {
     if (!notice.pingJiaoEndTime) return;
     const endTime = new Date(notice.pingJiaoEndTime).getTime();
-    if (endTime < Date.now()) { Alert.alert('提示', '评教已截止'); return; }
+    if (endTime < Date.now()) { showAlert({ title: '提示', message: '评教已截止', icon: 'info', simple: true }); return; }
     setTodoRounds([{ round: '评教', start: notice.pingJiaoEndTime }]);
     setTodoNotice(notice);
     setTodoModalVisible(true);
@@ -414,7 +416,7 @@ export const NotifScreen = ({ navigation }: any) => {
       try { await addTodo(courseName, r.round, r.start); } catch {}
     }
     setTodoModalVisible(false);
-    Alert.alert('✅ 已创建', `已为 ${todoRounds.length} 个轮次创建待办，可在作业页面查看`);
+    showAlert({ title: '✅ 已创建', message: `已为 ${todoRounds.length} 个轮次创建待办，可在作业页面查看`, icon: 'check-circle', iconColor: '#43A047', simple: true });
   }, [todoRounds, todoNotice]);
 
   const onRefresh = useCallback(async () => {
@@ -753,6 +755,7 @@ export const NotifScreen = ({ navigation }: any) => {
           </View>
         </View>
       </Modal>
+      <AlertModal {...alertProps} />
     </View>
   );
 };

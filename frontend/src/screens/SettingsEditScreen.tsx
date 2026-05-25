@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, Alert, Linking, Keyboard, Modal } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, Linking, Keyboard, Modal } from 'react-native';
+import { AlertModal, useAlertModal } from '../components/AlertModal';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -18,6 +19,7 @@ const TYPE_CONFIG: Record<string, { title: string; placeholder: string; icon: st
 };
 
 export const SettingsEditScreen = ({ navigation, route }: any) => {
+  const { showAlert, alertProps } = useAlertModal();
   const insets = useSafeAreaInsets();
   const { type } = route.params;
   const config = TYPE_CONFIG[type] || { title: '编辑', placeholder: '', icon: 'edit' };
@@ -71,28 +73,33 @@ export const SettingsEditScreen = ({ navigation, route }: any) => {
 
   // 登出 jAccount — 清除所有活跃会话（保留本地凭据以支持重新自动登录）
   const handleLogout = async () => {
-    Alert.alert('登出 jAccount', '确定要退出登录吗？（将同时退出邮箱和 i.sjtu 会话，本地保存的凭据供下次自动登录使用）', [
-      { text: '取消', style: 'cancel' },
-      { text: '登出', style: 'destructive', onPress: async () => {
-        try { await (WebView as any).clearCookies(); } catch (e) {}
-        try {
-          await fetch('https://i.sjtu.edu.cn/logout?t=' + Date.now() + '&login_type=',
-            { headers: { 'User-Agent': 'Mozilla/5.0' } });
-        } catch (e) {}
-        try {
-          await fetch('https://jaccount.sjtu.edu.cn/oauth2/logout?post_logout_redirect_uri=https%3A%2F%2Fi.sjtu.edu.cn%2Fxtgl%2Flogin_slogin.html&client_id=MVJGw8u0bzoMJVbfb4Fk',
-            { headers: { 'User-Agent': 'Mozilla/5.0' } });
-        } catch (e) {}
-        // 清除邮箱本地 token（使 ensureMailAuth 重新走完整登录流程）
-        try {
-          const { removeMailAuthToken, removeMailCsrfToken, removeMailSessionId } = await import('../utils/mailStorage');
-          await removeMailAuthToken();
-          await removeMailCsrfToken();
-          await removeMailSessionId();
-        } catch (e) {}
-        Alert.alert('已登出', 'jAccount 会话已退出，本地凭据已保留');
-      }},
-    ]);
+    showAlert({
+      title: '登出 jAccount',
+      message: '确定要退出登录吗？（将同时退出邮箱和 i.sjtu 会话，本地保存的凭据供下次自动登录使用）',
+      icon: 'logout',
+      iconColor: '#E53935',
+      buttons: [
+        { text: '取消', style: 'cancel' },
+        { text: '登出', style: 'destructive', onPress: async () => {
+          try { await (WebView as any).clearCookies(); } catch (e) {}
+          try {
+            await fetch('https://i.sjtu.edu.cn/logout?t=' + Date.now() + '&login_type=',
+              { headers: { 'User-Agent': 'Mozilla/5.0' } });
+          } catch (e) {}
+          try {
+            await fetch('https://jaccount.sjtu.edu.cn/oauth2/logout?post_logout_redirect_uri=https%3A%2F%2Fi.sjtu.edu.cn%2Fxtgl%2Flogin_slogin.html&client_id=MVJGw8u0bzoMJVbfb4Fk',
+              { headers: { 'User-Agent': 'Mozilla/5.0' } });
+          } catch (e) {}
+          try {
+            const { removeMailAuthToken, removeMailCsrfToken, removeMailSessionId } = await import('../utils/mailStorage');
+            await removeMailAuthToken();
+            await removeMailCsrfToken();
+            await removeMailSessionId();
+          } catch (e) {}
+          showAlert({ title: '已登出', message: 'jAccount 会话已退出，本地凭据已保留', icon: 'info', simple: true });
+        }},
+      ],
+    });
   };
 
   return (
@@ -195,6 +202,7 @@ export const SettingsEditScreen = ({ navigation, route }: any) => {
           </View>
         </View>
       </Modal>
+      <AlertModal {...alertProps} />
     </View>
   );
 };

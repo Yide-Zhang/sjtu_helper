@@ -1,10 +1,11 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert, PanResponder, Dimensions, LayoutAnimation, UIManager, Platform, Animated, Modal } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, PanResponder, Dimensions, LayoutAnimation, UIManager, Platform, Animated, Modal } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { fetchWeeklyScheduleJSON, fetchCourseHTML } from '../api/jaccount';
 import Icon from 'react-native-vector-icons/Feather';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getJAccountUsername, getScheduleUpdateInterval } from '../utils/storage';
+import { AlertModal, useAlertModal } from '../components/AlertModal';
 
 const SCHEDULE_CACHE_PREFIX = 'SCHEDULE_CACHE_';
 const CALENDAR_CACHE_KEY = 'CALENDAR_CACHE'; // 校历数据，单独存储
@@ -159,6 +160,7 @@ const batchFetchAllSemesters = async () => {
 };
 
 export const ScheduleScreen = ({ navigation }: any) => {
+  const { showAlert, alertProps } = useAlertModal();
   const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(false);
   const [fullSchedule, setFullSchedule] = useState<any[]>([]);
@@ -363,7 +365,7 @@ export const ScheduleScreen = ({ navigation }: any) => {
 
       } catch (e: any) {
         if (e.message && e.message.includes('登录失效')) {
-          Alert.alert('提示', '教务系统登录已失效，请去设置页重新登录');
+          showAlert({ title: '提示', message: '教务系统登录已失效，请去设置页重新登录', icon: 'sync-problem', iconColor: '#E53935', simple: true });
         } else {
          console.warn("Init week failed", e);
         }
@@ -668,7 +670,7 @@ export const ScheduleScreen = ({ navigation }: any) => {
           </View>
         </View>
       </Modal>
-
+      <AlertModal {...alertProps} />
     </View>
   );
 };

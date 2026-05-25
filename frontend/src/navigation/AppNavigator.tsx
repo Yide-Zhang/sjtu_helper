@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
-import { createStackNavigator } from '@react-navigation/stack';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import { LoginScreen } from '../screens/LoginScreen';
 import { MainScreen } from '../screens/MainScreen';
@@ -22,7 +22,7 @@ import { RenderTestScreen } from '../screens/RenderTestScreen';
 import { CourseCommunityScreen } from '../screens/CourseCommunityScreen';
 import { ActivityIndicator, View } from 'react-native';
 
-const Stack = createStackNavigator();
+const Stack = createNativeStackNavigator();
 
 export const AppNavigator = () => {
   const [initialRoute, setInitialRoute] = useState<string | null>(null);

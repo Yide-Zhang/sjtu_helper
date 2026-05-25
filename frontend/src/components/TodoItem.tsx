@@ -1,5 +1,6 @@
 import React, { useMemo, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Animated, LayoutAnimation, Platform, UIManager, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Animated, LayoutAnimation, Platform, UIManager } from 'react-native';
+import { AlertModal, useAlertModal } from '../components/AlertModal';
 import { CustomTodo } from '../utils/todoStorage';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 
@@ -62,6 +63,7 @@ const URGENCY_COLORS: Record<UrgencyLevel, string> = {
 };
 
 export const TodoItem: React.FC<Props> = ({ todo, onToggle, onEdit, onDelete }) => {
+  const { showAlert, alertProps } = useAlertModal();
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const slideAnim = useRef(new Animated.Value(0)).current;
   
@@ -83,25 +85,30 @@ export const TodoItem: React.FC<Props> = ({ todo, onToggle, onEdit, onDelete }) 
   };
 
   const handleDeletePress = () => {
-    Alert.alert('确认删除', `确定要删除「${todo.title}」吗？`, [
-      { text: '取消', style: 'cancel' },
-      {
-        text: '删除',
-        style: 'destructive',
-        onPress: () => {
-          // 随机向左或向右滑出
-          const direction = Math.random() > 0.5 ? 1 : -1;
-          Animated.timing(slideAnim, {
-            toValue: direction * 500,
-            duration: 300,
-            useNativeDriver: true,
-          }).start(() => {
-            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-            onDelete?.(todo.id);
-          });
+    showAlert({
+      title: '确认删除',
+      message: `确定要删除「${todo.title}」吗？`,
+      icon: 'delete',
+      iconColor: '#E53935',
+      buttons: [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '删除',
+          style: 'destructive',
+          onPress: () => {
+            const direction = Math.random() > 0.5 ? 1 : -1;
+            Animated.timing(slideAnim, {
+              toValue: direction * 500,
+              duration: 300,
+              useNativeDriver: true,
+            }).start(() => {
+              LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+              onDelete?.(todo.id);
+            });
+          },
         },
-      },
-    ]);
+      ],
+    });
   };
 
   // 1. 已完成且属于未来的卡片样式 (保持紧凑设计，不带垫底，仅对齐间距)
@@ -133,6 +140,8 @@ export const TodoItem: React.FC<Props> = ({ todo, onToggle, onEdit, onDelete }) 
 
   // 2. 未完成或已过期的卡片 (完美融合你的半透明硬垫底设计)
   return (
+    <>
+    <AlertModal {...alertProps} />
     <Animated.View style={[styles.cardWrapper, { transform: [{ translateX: slideAnim }, { scale: scaleAnim }] }]}>
       <View style={styles.glowWrapper}>
         
@@ -174,6 +183,7 @@ export const TodoItem: React.FC<Props> = ({ todo, onToggle, onEdit, onDelete }) 
         </View>
       </View>
     </Animated.View>
+    </>
   );
 };
 

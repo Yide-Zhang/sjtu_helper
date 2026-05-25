@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, Modal } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView, ActivityIndicator, KeyboardAvoidingView, Platform, Modal } from 'react-native';
+import { AlertModal, useAlertModal } from '../components/AlertModal';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { sendMessage, saveDraft, fetchFolder, ensureMailAuth } from '../api/mail';
@@ -20,6 +21,7 @@ interface Contact {
 const SEP = /[,;，；]\s*$/;
 
 export const ComposeMailScreen = ({ navigation, route }: any) => {
+  const { showAlert, alertProps } = useAlertModal();
   const insets = useSafeAreaInsets();
   const [toText, setToText] = useState('');
   const [toChips, setToChips] = useState<string[]>(() => {
@@ -158,7 +160,7 @@ export const ComposeMailScreen = ({ navigation, route }: any) => {
 
   const handleSend = async () => {
     const toList = getAllTo();
-    if (toList.length === 0) { Alert.alert('提示', '请填写收件人'); return; }
+    if (toList.length === 0) { showAlert({ title: '提示', message: '请填写收件人', icon: 'info', simple: true }); return; }
     setSending(true);
     try {
       const ccList = getAllCc();
@@ -213,7 +215,7 @@ export const ComposeMailScreen = ({ navigation, route }: any) => {
         size: file.size || 0,
       }]);
     } catch (e: any) {
-      Alert.alert('选择文件失败', e?.message || '未知错误');
+      showAlert({ title: '选择文件失败', message: e?.message || '未知错误', icon: 'error-outline', iconColor: '#E53935', simple: true });
     }
   };
 
@@ -396,6 +398,7 @@ export const ComposeMailScreen = ({ navigation, route }: any) => {
           {toChips.length > 0 ? `发送至 ${toChips[0]}${toChips.length > 1 ? ` 等${toChips.length}人` : ''}` : ''}
         </Text>
       </View>
+      <AlertModal {...alertProps} />
     </KeyboardAvoidingView>
   );
 };

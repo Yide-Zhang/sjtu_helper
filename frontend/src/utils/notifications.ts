@@ -4,6 +4,7 @@
 //    或使用 EAS Build 打包后安装
 
 import * as Notifications from 'expo-notifications';
+import { SchedulableTriggerInputTypes } from 'expo-notifications';
 import * as Device from 'expo-device';
 import { Platform } from 'react-native';
 
@@ -79,7 +80,7 @@ export async function scheduleAssignmentNotifications(assignments: any[]) {
           body: `【${assignment.course_name || '未知课程'}】的作业 ${assignment.name} 明天就要交啦！`,
           sound: true,
         },
-        trigger: triggerDate, // 在某些 Expo 版本可以直接传 date，或者用秒/时间配置
+        trigger: { type: SchedulableTriggerInputTypes.DATE, date: triggerDate }
       });
     }
 
@@ -93,7 +94,7 @@ export async function scheduleAssignmentNotifications(assignments: any[]) {
           body: `【${assignment.course_name || '未知课程'}】的作业 ${assignment.name} 还有不到1小时截止！快冲！`,
           sound: true,
         },
-        trigger: triggerDate,
+        trigger: { type: SchedulableTriggerInputTypes.DATE, date: triggerDate },
       });
     }
   });

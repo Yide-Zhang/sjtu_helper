@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { StyleSheet, View, ActivityIndicator, TouchableOpacity, Text, Alert } from 'react-native';
+import { StyleSheet, View, ActivityIndicator, TouchableOpacity, Text } from 'react-native';
+import { AlertModal, useAlertModal } from '../components/AlertModal';
 import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getJAccountUsername, getJAccountPassword } from '../utils/storage';
@@ -11,6 +12,7 @@ const log = (msg: string, ...args: any[]) => console.log(`[JAccountLogin] ${msg}
 const warn = (msg: string, ...args: any[]) => console.warn(`[JAccountLogin] ${msg}`, ...args);
 
 export const JAccountLoginScreen = ({ navigation, route }: any) => {
+  const { showAlert, alertProps } = useAlertModal();
   const insets = useSafeAreaInsets();
 
   const [silentMode, setSilentMode] = useState(true);               
@@ -206,12 +208,12 @@ export const JAccountLoginScreen = ({ navigation, route }: any) => {
 
           if (result.code === 'WRONG_USER_OR_PASSWORD') {
             if (silentMode) {
-              Alert.alert('登录失败', 'jAccount 用户名或密码错误。', [
-                { text: '取消', onPress: handleUserCancel },
-                { text: '去修改', onPress: () => navigation.replace('SettingsEdit', { type: 'jaccount' }) },
-              ]);
+              showAlert({ title: '登录失败', message: 'jAccount 用户名或密码错误。', icon: 'error-outline', iconColor: '#E53935', buttons: [
+                { text: '取消', onPress: handleUserCancel, style: 'cancel' },
+                { text: '去修改', style: 'default', onPress: () => navigation.replace('SettingsEdit', { type: 'jaccount' }) },
+              ] });
             } else {
-              Alert.alert('登录失败', '用户名或密码错误，请重试');
+              showAlert({ title: '登录失败', message: '用户名或密码错误，请重试', icon: 'error-outline', iconColor: '#E53935', simple: true });
               loginHandledRef.current = false;
             }
             return;
@@ -221,9 +223,9 @@ export const JAccountLoginScreen = ({ navigation, route }: any) => {
             const attempt = retryCountRef.current + 1;
             if (attempt >= MAX_RETRIES) {
               loginHandledRef.current = false;
-              Alert.alert('验证码识别超限', '自动验证码识别多次失败，请切换到浏览器手动登录。', [
+              showAlert({ title: '验证码识别超限', message: '自动验证码识别多次失败，请切换到浏览器手动登录。', icon: 'warning', iconColor: '#E65100', buttons: [
                 { text: '好的', onPress: () => switchToManual() }
-              ]);
+              ] });
               return;
             }
             loginHandledRef.current = false;
@@ -258,7 +260,7 @@ export const JAccountLoginScreen = ({ navigation, route }: any) => {
     if (mode === 'logout') {
       if (url.includes('jaccount.sjtu.edu.cn/oauth2') || url.includes('jaccount.sjtu.edu.cn/logout')) return;
       if (url.includes('jaccount.sjtu.edu.cn') || url.includes('login') || url.includes('i.sjtu.edu.cn')) {
-        Alert.alert('已登出', 'jAccount 会话已清除');
+        showAlert({ title: '已登出', message: 'jAccount 会话已清除', icon: 'info', simple: true });
         navigation.goBack();
         return;
       }
@@ -321,6 +323,7 @@ export const JAccountLoginScreen = ({ navigation, route }: any) => {
           />
         </View>
       )}
+      <AlertModal {...alertProps} />
     </View>
   );
 };

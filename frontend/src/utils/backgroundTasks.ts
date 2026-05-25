@@ -5,9 +5,10 @@ import * as TaskManager from 'expo-task-manager';
 import * as BackgroundFetch from 'expo-background-fetch';
 import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getToken, getBgSnapshot, setBgSnapshot, BgSnapshot } from './storage';
+import { getToken, getBgSnapshot, setBgSnapshot, BgSnapshot, getIsjtuNoticeCache, setIsjtuNoticeCache, getJAccountUsername } from './storage';
 import { fetchAllUpcomingAssignments, CanvasAssignment } from '../api/canvas';
 import { ensureMailAuth, fetchInbox } from '../api/mail';
+import { fetchIsjtuNotices } from '../api/isjtu';
 
 export const BACKGROUND_FETCH_TASK = 'sjtu-helper-background-fetch';
 
@@ -105,6 +106,44 @@ async function performBackgroundCheck() {
             trigger: { channelId: 'default' },
           });
         }
+      }
+    }
+  } catch {}
+
+  // 3. 检查 i.sjtu 待阅通知（调课提醒等）
+  try {
+    const currentUser = await getJAccountUsername();
+    if (currentUser) {
+      const notices = await fetchIsjtuNotices(1, 50);
+      if (notices && notices.length > 0) {
+        const newIds = notices.map(n => n.id).filter(Boolean) as string[];
+
+        // 读取缓存的 ID 列表及对应的用户名
+        const cached = await getIsjtuNoticeCache();
+
+        if (cached && cached.username === currentUser) {
+          // 缓存存在且属于当前用户 → 只提醒新出现的通知
+          const oldIds = new Set(cached.data.ids);
+          const freshNotices = notices.filter(n => n.id && !oldIds.has(n.id));
+          for (const notice of freshNotices) {
+            const title = notice.isTiaoKe
+              ? `📅 调课提醒：${notice.tiaoKeInfo?.course || ''}`
+              : '📢 新教务通知';
+            await Notifications.scheduleNotificationAsync({
+              content: {
+                title,
+                body: notice.title.substring(0, 100),
+                sound: true,
+              },
+              trigger: { channelId: 'default' },
+            });
+          }
+        }
+        // else: 无缓存或缓存属于其他用户 → 不发送通知
+        //       静默更新缓存（丢弃旧数据，从当前数据开始记录）
+
+        // 更新缓存（无论是否发送通知，都更新为当前拉取的 ID 列表）
+        await setIsjtuNoticeCache(newIds);
       }
     }
   } catch {}

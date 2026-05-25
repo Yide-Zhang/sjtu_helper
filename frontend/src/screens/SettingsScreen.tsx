@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator, Modal, TextInput, ScrollView, Switch } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Modal, TextInput, ScrollView, Switch } from 'react-native';
+import { AlertModal, useAlertModal } from '../components/AlertModal';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { fetchCourseHTML, fetchWeeklyScheduleJSON, checkJAccountSession } from '../api/jaccount';
 import { getJAccountUsername, getJAccountPassword, getScheduleUpdateInterval, setScheduleUpdateInterval, getExamUpdateInterval, setExamUpdateInterval, getDevModeEnabled, persistDevModeEnabled, getCrazyThursdayEnabled, setCrazyThursdayEnabled, isCrazyThursdayDismissedThisWeek, getBackgroundInterval, setBackgroundInterval } from '../utils/storage';
@@ -61,6 +62,7 @@ const SETTINGS_SECTIONS = [
 ];
 
 export const SettingsScreen = ({ navigation }: any) => {
+  const { showAlert, alertProps } = useAlertModal();
   const insets = useSafeAreaInsets();
   const [loading, setLoading] = React.useState(false);
   const [devModeEnabled, setDevModeEnabled] = useState(false);
@@ -109,7 +111,7 @@ export const SettingsScreen = ({ navigation }: any) => {
     setClearState('clearing');
     try {
       const keys = await AsyncStorage.getAllKeys();
-      await AsyncStorage.multiRemove(keys);
+      await AsyncStorage.removeMany(keys);
       setClearState('success');
     } catch (e: any) {
       setClearErrorMsg(e?.message || '未知错误');
@@ -152,11 +154,11 @@ export const SettingsScreen = ({ navigation }: any) => {
       persistDevModeEnabled(true);
       setShowDevPwdModal(false);
       setDevPwdInput('');
-      Alert.alert('开发者模式', '已开启');
+      showAlert({ title: '开发者模式', message: '已开启', icon: 'lock-open', iconColor: '#7B1FA2', simple: true });
     } else {
       setShowDevPwdModal(false);
       setDevPwdInput('');
-      Alert.alert('错误', '密码错误');
+      showAlert({ title: '错误', message: '密码错误', icon: 'error-outline', iconColor: '#E53935', simple: true });
     }
   };
 
@@ -212,12 +214,9 @@ export const SettingsScreen = ({ navigation }: any) => {
             sessionInfo = isAlive ? '会话有效' : '会话已过期';
           }
 
-          Alert.alert(
-            'jAccount 诊断',
-            `凭据状态\n${'─'.repeat(20)}\n${credsInfo}\n\n会话状态\n${'─'.repeat(20)}\n${sessionInfo}`
-          );
+          showAlert({ title: 'jAccount 诊断', message: `凭据状态\n${'─'.repeat(20)}\n${credsInfo}\n\n会话状态\n${'─'.repeat(20)}\n${sessionInfo}`, icon: 'info', simple: true });
         } catch (e: any) {
-          Alert.alert('诊断失败', e?.message || '未知错误');
+          showAlert({ title: '诊断失败', message: e?.message || '未知错误', icon: 'error-outline', iconColor: '#E53935', simple: true });
         }
       })();
       return;
@@ -343,10 +342,10 @@ export const SettingsScreen = ({ navigation }: any) => {
             ? `\n\n${fetchedCount > 0 ? `新获取 ${fetchedCount} 个学期` : ''}${errorCount > 0 ? `\n${errorCount} 个学期无数据或失败` : ''}`
             : '';
 
-          Alert.alert('校历缓存', `${mainInfo}${othersText}${summary}`);
+          showAlert({ title: '校历缓存', message: `${mainInfo}${othersText}${summary}`, icon: 'calendar-today', simple: true });
         } catch (e: any) {
           setLoading(false);
-          Alert.alert('诊断失败', e?.message || '未知错误');
+          showAlert({ title: '诊断失败', message: e?.message || '未知错误', icon: 'error-outline', iconColor: '#E53935', simple: true });
         }
       })();
       return;
@@ -359,12 +358,9 @@ export const SettingsScreen = ({ navigation }: any) => {
           const lines = result.steps.map((s, i) =>
             `${i + 1}. ${s.ok ? '✅' : '❌'} ${s.name}\n   ${s.detail}${s.detail ? '' : ''}`
           ).join('\n\n');
-          Alert.alert(
-            `邮箱诊断 ${result.success ? '✅ 正常' : '❌ 失败'}`,
-            lines
-          );
+          showAlert({ title: `邮箱诊断 ${result.success ? '✅ 正常' : '❌ 失败'}`, message: lines, icon: result.success ? 'check-circle' : 'error-outline', iconColor: result.success ? '#43A047' : '#E53935', simple: true });
         } catch (e: any) {
-          Alert.alert('诊断异常', e?.message || '未知错误');
+          showAlert({ title: '诊断异常', message: e?.message || '未知错误', icon: 'error-outline', iconColor: '#E53935', simple: true });
         } finally {
           setLoading(false);
         }
@@ -387,17 +383,7 @@ export const SettingsScreen = ({ navigation }: any) => {
           imgOk = true;
         } catch {}
 
-        Alert.alert(
-          'Crazy Thursday 诊断',
-          `系统时间: ${now.toLocaleString('zh-CN')}\n` +
-          `星期${dayNames[day]}${isThu ? ' ✅ 是周四' : ' ❌ 不是周四'}\n` +
-          `${'─'.repeat(20)}\n` +
-          `功能开关: ${enabled ? '✅ 开启' : '❌ 关闭'}\n` +
-          `本周已关闭: ${dismissed ? '✅ 是' : '❌ 否'}\n` +
-          `图片文件: ${imgOk ? '✅ 存在' : '❌ 缺失'}\n` +
-          `${'─'.repeat(20)}\n` +
-          `显示条件: ${isThu && enabled && !dismissed && imgOk ? '✅ 满足' : '❌ 不满足'}`
-        );
+        showAlert({ title: 'Crazy Thursday 诊断', message: `系统时间: ${now.toLocaleString('zh-CN')}\n星期${dayNames[day]}${isThu ? ' ✅ 是周四' : ' ❌ 不是周四'}\n${'─'.repeat(20)}\n功能开关: ${enabled ? '✅ 开启' : '❌ 关闭'}\n本周已关闭: ${dismissed ? '✅ 是' : '❌ 否'}\n图片文件: ${imgOk ? '✅ 存在' : '❌ 缺失'}\n${'─'.repeat(20)}\n显示条件: ${isThu && enabled && !dismissed && imgOk ? '✅ 满足' : '❌ 不满足'}`, icon: 'info', simple: true });
       })();
       return;
     }
@@ -406,12 +392,9 @@ export const SettingsScreen = ({ navigation }: any) => {
       setLoading(true);
       try {
         const text = await fetchCourseHTML();
-        Alert.alert(
-          '课表 JSON 提取成功！', 
-          `数据包大小: ${Math.round(text.length / 1024)} KB\n\n已成功获取了包含所有【课程名、上课地点、老师、上课周数】的纯净 JSON，可以开始画课表了！`
-        );
+        showAlert({ title: '课表 JSON 提取成功！', message: `数据包大小: ${Math.round(text.length / 1024)} KB\n\n已成功获取了包含所有【课程名、上课地点、老师、上课周数】的纯净 JSON，可以开始画课表了！`, icon: 'check-circle', iconColor: '#43A047', simple: true });
       } catch (err: any) {
-        Alert.alert('错误', err?.message || '自动登录或抓取失败。');
+        showAlert({ title: '错误', message: err?.message || '自动登录或抓取失败。', icon: 'error-outline', iconColor: '#E53935', simple: true });
       } finally {
         setLoading(false);
       }
@@ -1359,10 +1342,7 @@ export const SettingsScreen = ({ navigation }: any) => {
                             const rounds = item.xuankeInfo?.rounds;
                             return `[${i + 1}] ${item.title.substring(0, 40)}\n    ${item.date} | ${rounds?.length || 0} 轮次`;
                           }).join('\n\n');
-                          Alert.alert(
-                            '仅本地渲染预览',
-                            `共 ${list.length} 条置顶项（仅从缓存读取，无网络请求）：\n\n${content}`
-                          );
+                          showAlert({ title: '仅本地渲染预览', message: `共 ${list.length} 条置顶项（仅从缓存读取，无网络请求）：\n\n${content}`, icon: 'info', simple: true });
                         }}
                         activeOpacity={0.7}
                       >
@@ -1384,6 +1364,7 @@ export const SettingsScreen = ({ navigation }: any) => {
             </View>
           </View>
         </Modal>
+      <AlertModal {...alertProps} />
       </View>
     </View>
   );

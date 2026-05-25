@@ -1,14 +1,16 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
 import { storeToken } from '../utils/storage';
+import { AlertModal, useAlertModal } from '../components/AlertModal';
 
 export const LoginScreen = ({ navigation }: any) => {
+  const { showAlert, alertProps } = useAlertModal();
   const [token, setToken] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
     if (!token) {
-      Alert.alert('提示', '请输入 Canvas Token');
+      showAlert({ title: '提示', message: '请输入 Canvas Token', icon: 'info', simple: true });
       return;
     }
 
@@ -19,7 +21,7 @@ export const LoginScreen = ({ navigation }: any) => {
       navigation.replace('Main');
     } catch (error) {
       setLoading(false);
-      Alert.alert('登录失败', '请检查网络或 Token 是否正确');
+      showAlert({ title: '登录失败', message: '请检查网络或 Token 是否正确', icon: 'error-outline', iconColor: '#E53935', simple: true });
     }
   };
 
@@ -55,6 +57,8 @@ export const LoginScreen = ({ navigation }: any) => {
           )}
         </TouchableOpacity>
       </View>
+
+      <AlertModal {...alertProps} />
     </KeyboardAvoidingView>
   );
 };

@@ -1,15 +1,17 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList, ActivityIndicator, RefreshControl, Animated, Dimensions, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, FlatList, ActivityIndicator, RefreshControl, Animated, Dimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { fetchAllUpcomingAssignments, CanvasAssignment } from '../api/canvas';
 import { AssignmentCard } from '../components/AssignmentCard';
 import { getCache, setCache } from '../utils/cache';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
+import { AlertModal, useAlertModal } from '../components/AlertModal';
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 
 export const AnnouncementsScreen = ({ navigation }: any) => {
+  const { showAlert, alertProps } = useAlertModal();
   const insets = useSafeAreaInsets();
   const [assignments, setAssignments] = useState<CanvasAssignment[]>([]);
   const [loading, setLoading] = useState(true);
@@ -98,7 +100,7 @@ export const AnnouncementsScreen = ({ navigation }: any) => {
         // 检查是否所有可见公告都已创建待办
         const allDone = visibleAnnouncements.every(a => todoAnnouncements.includes(a.id));
         if (allDone) {
-          Alert.alert('提示', '所有的待办都已创建');
+          showAlert({ title: '提示', message: '所有的待办都已创建', icon: 'check-circle', iconColor: '#43A047', simple: true });
         }
         return;
       }

@@ -263,3 +263,33 @@ export const getBgSnapshot = async (): Promise<BgSnapshot | null> => {
 export const setBgSnapshot = async (snap: BgSnapshot) => {
   await AsyncStorage.setItem(BG_LAST_SNAPSHOT_KEY, JSON.stringify(snap));
 };
+
+// ── i.sjtu 通知缓存（用于后台通知去重，关联 jAccount 用户名）──
+const ISJTU_NOTICES_CACHE_KEY = 'ISJTU_NOTICES_CACHE';
+const ISJTU_NOTICES_USER_KEY = 'ISJTU_NOTICES_USER';
+
+export interface IsjtuNoticeCache {
+  ids: string[];
+  timestamp: number;
+}
+
+/** 获取缓存的 i.sjtu 通知 ID 列表，同时返回缓存的用户名 */
+export const getIsjtuNoticeCache = async (): Promise<{ data: IsjtuNoticeCache; username: string } | null> => {
+  try {
+    const [dataRaw, userRaw] = await Promise.all([
+      AsyncStorage.getItem(ISJTU_NOTICES_CACHE_KEY),
+      AsyncStorage.getItem(ISJTU_NOTICES_USER_KEY),
+    ]);
+    if (!dataRaw || !userRaw) return null;
+    return { data: JSON.parse(dataRaw), username: userRaw };
+  } catch { return null; }
+};
+
+/** 保存 i.sjtu 通知缓存，关联当前 jAccount 用户名 */
+export const setIsjtuNoticeCache = async (ids: string[]) => {
+  const username = await getJAccountUsername();
+  await Promise.all([
+    AsyncStorage.setItem(ISJTU_NOTICES_CACHE_KEY, JSON.stringify({ ids, timestamp: Date.now() })),
+    AsyncStorage.setItem(ISJTU_NOTICES_USER_KEY, username || ''),
+  ]);
+};

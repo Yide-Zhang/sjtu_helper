@@ -7,6 +7,7 @@ import { getToken, getJAccountUsername, getJAccountPassword, getDevModeEnabled, 
 import { checkJAccountSession, fetchExamJSON, fetchWeeklyScheduleJSON } from '../api/jaccount';
 import { fetchAllUpcomingAssignments, CanvasAssignment } from '../api/canvas';
 import { ensureMailAuth, fetchInbox, ZimbraMessage } from '../api/mail';
+import { removeMailCsrfToken, removeMailAuthToken } from '../utils/mailStorage';
 import { fetchJwcNoticeList, fetchJwcNoticeDetail, JwcNotice, extractXuanKeMeta, parsePingJiaoEndTime } from '../api/jwc';
 import { fetchIsjtuNotices, IsjtuNotice, parseTiaoKe } from '../api/isjtu';
 import { getCache, setCache, clearCache } from '../utils/cache';
@@ -142,7 +143,11 @@ export const MainScreen = ({ navigation }: any) => {
             if (attempt < 2) await new Promise(r => setTimeout(r, 1500));
           }
           setJaccountSessionAlive(loginSuccess);
-          if (!loginSuccess) {
+          if (loginSuccess) {
+            // jAccount 重登录成功 → 清空邮箱旧凭证，确保后续强制走完整认证
+            await removeMailCsrfToken().catch(() => {});
+            await removeMailAuthToken().catch(() => {});
+          } else {
             // 自动登录全部失败，导航到 WebView 登录页
             navigation.navigate('JAccountLogin', { mode: 'auto' });
           }
@@ -152,6 +157,7 @@ export const MainScreen = ({ navigation }: any) => {
       }
 
       // 检测邮箱认证（自动重试已内置于 ensureMailAuth）
+      // 无论 jAccount 会话之前是否存活，都尝试邮箱认证（cookie 共享）
       if (hasCreds) {
         setMailChecking(true);
         const mailOk = await ensureMailAuth();
@@ -258,7 +264,7 @@ export const MainScreen = ({ navigation }: any) => {
         k.startsWith('EXAM_CACHE_') ||
         k === 'JWC_NOTICES_CACHE'
       );
-      if (removeKeys.length > 0) await AsyncStorage.multiRemove(removeKeys);
+      if (removeKeys.length > 0) await AsyncStorage.removeMany(removeKeys);
       await Promise.all([
         loadAssignmentsSummary(),
         loadAnnouncementsSummary(),

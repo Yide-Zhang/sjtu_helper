@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, useWindowDimensions, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, useWindowDimensions } from 'react-native';
+import { AlertModal, useAlertModal } from '../components/AlertModal';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { fetchMessageDetail, markAsRead, deleteMessage, ZimbraMessage } from '../api/mail';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
@@ -11,6 +12,7 @@ const formatFullDate = (ts: number): string => {
 };
 
 export const MailDetailScreen = ({ navigation, route }: any) => {
+  const { showAlert, alertProps } = useAlertModal();
   const insets = useSafeAreaInsets();
   const { width: winWidth } = useWindowDimensions();
   const { msgId } = route.params;
@@ -38,15 +40,21 @@ export const MailDetailScreen = ({ navigation, route }: any) => {
   };
 
   const handleDelete = () => {
-    Alert.alert('删除邮件', '确定将该邮件移入垃圾箱？', [
-      { text: '取消', style: 'cancel' },
-      {
-        text: '删除', style: 'destructive', onPress: async () => {
-          await deleteMessage(msgId);
-          navigation.goBack();
+    showAlert({
+      title: '删除邮件',
+      message: '确定将该邮件移入垃圾箱？',
+      icon: 'delete',
+      iconColor: '#E53935',
+      buttons: [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '删除', style: 'destructive', onPress: async () => {
+            await deleteMessage(msgId);
+            navigation.goBack();
+          },
         },
-      },
-    ]);
+      ],
+    });
   };
 
   const handleEdit = () => {
@@ -138,6 +146,7 @@ export const MailDetailScreen = ({ navigation, route }: any) => {
           )}
         </View>
       )}
+      <AlertModal {...alertProps} />
     </View>
   );
 };

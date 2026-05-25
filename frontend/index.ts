@@ -1,3 +1,6 @@
+// ⚠️ 必须在最顶部导入，确保 gesture handler 在其它模块之前注册
+import 'react-native-gesture-handler';
+
 import { registerRootComponent } from 'expo';
 
 import App from './App';
