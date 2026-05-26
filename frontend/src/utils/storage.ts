@@ -135,6 +135,20 @@ export const persistDevModeEnabled = async (enabled: boolean) => {
   await AsyncStorage.setItem(DEV_MODE_KEY, enabled ? 'true' : 'false');
 };
 
+// 绝密功能
+const TOPSECRET_ENABLED_KEY = 'TOPSECRET_ENABLED';
+
+export const getTopSecretEnabled = async (): Promise<boolean> => {
+  try {
+    const val = await AsyncStorage.getItem(TOPSECRET_ENABLED_KEY);
+    return val === 'true';
+  } catch { return false; }
+};
+
+export const persistTopSecretEnabled = async (enabled: boolean) => {
+  await AsyncStorage.setItem(TOPSECRET_ENABLED_KEY, enabled ? 'true' : 'false');
+};
+
 // Crazy Thursday
 const CRAZY_THURSDAY_ENABLED_KEY = 'CRAZY_THURSDAY_ENABLED';
 const CRAZY_THURSDAY_DISMISSED_WEEK_KEY = 'CRAZY_THURSDAY_DISMISSED_WEEK';

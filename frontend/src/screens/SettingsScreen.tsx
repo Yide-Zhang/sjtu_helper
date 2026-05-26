@@ -1,19 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Modal, TextInput, ScrollView, Switch } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Modal, TextInput, ScrollView, Switch, Platform } from 'react-native';
 import { AlertModal, useAlertModal } from '../components/AlertModal';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { fetchCourseHTML, fetchWeeklyScheduleJSON, checkJAccountSession } from '../api/jaccount';
-import { getJAccountUsername, getJAccountPassword, getScheduleUpdateInterval, setScheduleUpdateInterval, getExamUpdateInterval, setExamUpdateInterval, getDevModeEnabled, persistDevModeEnabled, getCrazyThursdayEnabled, setCrazyThursdayEnabled, isCrazyThursdayDismissedThisWeek, getBackgroundInterval, setBackgroundInterval } from '../utils/storage';
+import { getJAccountUsername, getJAccountPassword, getScheduleUpdateInterval, setScheduleUpdateInterval, getExamUpdateInterval, setExamUpdateInterval, getDevModeEnabled, persistDevModeEnabled, getCrazyThursdayEnabled, setCrazyThursdayEnabled, isCrazyThursdayDismissedThisWeek, getBackgroundInterval, setBackgroundInterval, getTopSecretEnabled, persistTopSecretEnabled } from '../utils/storage';
 import { diagnoseMailAuth, fetchFolder, ensureMailAuth } from '../api/mail';
 import { getMailAuthToken, getMailCsrfToken } from '../utils/mailStorage';
 import { fetchIsjtuNotices, IsjtuNotice, parseTiaoKe } from '../api/isjtu';
 import { getBatteryOptimizationGuide, getDeviceInfoString } from '../utils/batteryOptimization';
+import { verifyDevPassword, verifyDeviceId } from '../utils/verification';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
-
-const DEV_PASSWORD = 'devPAss';
+import * as Application from 'expo-application';
 const INTERVAL_OPTIONS = [1, 3, 7];
 const BG_INTERVAL_OPTIONS = [0, 15, 30, 60];
 
@@ -30,9 +30,10 @@ const SETTING_ICON_COLORS: Record<string, string> = {
   devMode: '#8D6E63',
   semesterDebug: '#E65100',
   version: '#90A4AE',
+  shuiyuanSummary: '#1565C0',
 };
 
-const SETTINGS_SECTIONS = [
+const getSettingsSections = (devModeEnabled: boolean) => [
   {
     title: '个人信息',
     items: [
@@ -56,17 +57,59 @@ const SETTINGS_SECTIONS = [
   {
     title: '关于',
     items: [
-      { key: 'devMode', icon: 'build', label: '开发者模式', desc: '输入密码解锁调试功能' },
+      { key: 'devMode', icon: 'build', label: '开发者模式', desc: devModeEnabled ? '开发者功能已开启，点击管理' : '输入密码解锁调试功能' },
       { key: 'version', icon: 'info', label: '版本', desc: `SJTU Helper v${Constants.expoConfig?.version || '1.0'}` },
     ],
   },
 ];
+
+/** 开发者功能（devMode 开启后显示） */
+const getDevSections = (devModeEnabled: boolean, topSecretEnabled: boolean) => {
+  const sections: { title: string; items: { key: string; icon: string; label: string; desc: string }[] }[] = [];
+
+  if (devModeEnabled) {
+    const devItems: { key: string; icon: string; label: string; desc: string }[] = [
+      { key: 'devMode', icon: 'build', label: '开发者模式', desc: '当前：已开启' },
+      { key: 'jaccountStatus', icon: 'list-alt', label: 'jAccount 诊断', desc: '检测凭据与登录状态' },
+      { key: 'calendarCacheStatus', icon: 'calendar-today', label: '校历缓存诊断', desc: '查看本地校历缓存状态' },
+      { key: 'crazyThursdayStatus', icon: 'celebration', label: 'Crazy Thursday 诊断', desc: '调试彩蛋显示条件' },
+      { key: 'mailDiagnose', icon: 'email', label: '邮箱诊断', desc: '调试邮箱认证流程' },
+      { key: 'mailSuggestTest', icon: 'people-outline', label: '邮件联想诊断', desc: '测试收件人自动联想功能' },
+      { key: 'notifTest', icon: 'notifications', label: '教务通知诊断', desc: '调试 i.sjtu 通知拉取与解析' },
+      { key: 'testNotif', icon: 'notifications-active', label: '测试通知', desc: '发送本地测试通知' },
+      { key: 'batteryGuide', icon: 'battery-saver', label: '电池优化检测', desc: '查看本机后台白名单设置步骤' },
+      { key: 'semesterDebug', icon: 'calendar-month', label: '校历匹配诊断', desc: '查看学期缓存与日期推算详情' },
+      { key: 'pinnedCacheTest', icon: 'bookmark', label: '置顶缓存测试', desc: '测试仅从本地缓存渲染置顶项' },
+      { key: 'renderTest', icon: 'format-paint', label: '渲染测试', desc: '预览各卡片超长名称渲染效果' },
+      { key: 'clearData', icon: 'delete-sweep', label: '清除所有本地数据', desc: '模拟新用户，此操作不可撤销' },
+    ];
+
+    sections.push({
+      title: '开发者功能',
+      items: devItems,
+    });
+  }
+
+  // 绝密功能独立 section（仅当开发者模式开启时显示）
+  if (devModeEnabled) {
+    sections.push({
+      title: '绝密功能',
+      items: [
+        { key: 'topSecretFeature', icon: 'verified', label: '绝密功能', desc: '设备验证后开启' },
+        ...(topSecretEnabled ? [{ key: 'shuiyuanSummary', icon: 'article', label: '水源帖子摘要', desc: 'AI 摘要生成' }] : []),
+      ],
+    });
+  }
+
+  return sections;
+};
 
 export const SettingsScreen = ({ navigation }: any) => {
   const { showAlert, alertProps } = useAlertModal();
   const insets = useSafeAreaInsets();
   const [loading, setLoading] = React.useState(false);
   const [devModeEnabled, setDevModeEnabled] = useState(false);
+  const [topSecretEnabled, setTopSecretEnabled] = useState(false);
   const [showDevPwdModal, setShowDevPwdModal] = useState(false);
   const [devPwdInput, setDevPwdInput] = useState('');
   const [scheduleInterval, setScheduleIntervalState] = useState(1);
@@ -134,23 +177,26 @@ export const SettingsScreen = ({ navigation }: any) => {
   // 加载持久化状态
   React.useEffect(() => {
     (async () => {
-      const [v, dev, ev, bg] = await Promise.all([
+      const [v, dev, ev, bg, ts] = await Promise.all([
         getScheduleUpdateInterval(),
         getDevModeEnabled(),
         getExamUpdateInterval(),
         getBackgroundInterval(),
+        getTopSecretEnabled(),
       ]);
       setScheduleIntervalState(v);
       setDevModeEnabled(dev);
       setExamIntervalState(ev);
       setBgInterval(bg);
       setTempBgInterval(bg);
+      setTopSecretEnabled(ts);
     })();
   }, []);
 
   // 开发者模式密码验证
-  const handleDevPwdSubmit = () => {
-    if (devPwdInput === DEV_PASSWORD) {
+  const handleDevPwdSubmit = async () => {
+    const ok = await verifyDevPassword(devPwdInput);
+    if (ok) {
       setDevModeEnabled(true);
       persistDevModeEnabled(true);
       setShowDevPwdModal(false);
@@ -438,6 +484,62 @@ export const SettingsScreen = ({ navigation }: any) => {
       navigation.navigate('RenderTest');
       return;
     }
+    if (key === 'shuiyuanSummary') {
+      navigation.navigate('ShuiyuanSummary');
+      return;
+    }
+    if (key === 'topSecretFeature') {
+      const toggle = async () => {
+        try {
+          // 如果已开启，直接关闭
+          if (topSecretEnabled) {
+            setTopSecretEnabled(false);
+            await persistTopSecretEnabled(false);
+            showAlert({ title: '绝密功能', message: '已关闭', icon: 'lock', iconColor: '#B71C1C', simple: true });
+            return;
+          }
+
+          // 收集多个设备标识
+          const ids: string[] = [];
+
+          try { if (Platform.OS === 'android') { const s = (Platform.constants as any)?.Serial; if (s) ids.push('[Serial] ' + s); } } catch {}
+          try { const androidId = await Application.getAndroidId(); if (androidId) ids.push('[AndroidID] ' + androidId); } catch {}
+          try { const d = (Constants as any)?.deviceId; if (d) ids.push('[DeviceID] ' + d); } catch {}
+          try { const s = (Constants as any)?.sessionId; if (s) ids.push('[SessionID] ' + s); } catch {}
+          try { const inst = (Constants as any)?.installationId; if (inst) ids.push('[InstallID] ' + inst); } catch {}
+
+          // 用加盐哈希比对，源码中不存原始设备 ID
+          let matched = false;
+          for (const id of ids) {
+            const val = id.includes(' ') ? id.split(' ').slice(1).join(' ') : id;
+            if (val && await verifyDeviceId(val)) {
+              matched = true;
+              break;
+            }
+          }
+
+          if (matched) {
+            setTopSecretEnabled(true);
+            await persistTopSecretEnabled(true);
+            showAlert({
+              title: '🔓 绝密功能', message: '设备验证通过！\n\n绝密功能已开启。',
+              icon: 'verified', iconColor: '#1B5E20', simple: true,
+            });
+          } else {
+            const idList = ids.length > 0 ? ids.join('\n') : '(无法获取任何设备标识)';
+            showAlert({
+              title: '🔒 设备未授权',
+              message: `您的设备不在白名单中。\n\n检测到以下标识：\n${idList}\n\n该设备未通过验证。`,
+              icon: 'lock', iconColor: '#B71C1C', simple: true,
+            });
+          }
+        } catch (e: any) {
+          showAlert({ title: '检测失败', message: e?.message || '无法获取设备信息', icon: 'error-outline', iconColor: '#E53935', simple: true });
+        }
+      };
+      toggle();
+      return;
+    }
     navigation.navigate('SettingsEdit', { type: key });
   };
 
@@ -452,8 +554,8 @@ export const SettingsScreen = ({ navigation }: any) => {
           <View style={styles.headerSpacer} />
         </View>
 
-        <ScrollView style={{ flex: 1 }}>
-        {SETTINGS_SECTIONS.map((section, si) => (
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}>
+        {getSettingsSections(devModeEnabled).map((section, si) => (
           <View key={si} style={styles.section}>
             <Text style={styles.sectionTitle}>{section.title}</Text>
             <View style={styles.sectionCard}>
@@ -483,167 +585,81 @@ export const SettingsScreen = ({ navigation }: any) => {
                   </TouchableOpacity>
                 </View>
               ))}
-              {/* 开发者模式下在"关于"区末尾追加诊断入口 */}
-              {devModeEnabled && section.title === '关于' && (
-                <View>
-                  <TouchableOpacity
-                    style={styles.settingRow}
-                    onPress={() => handlePress('jaccountStatus')}
-                    activeOpacity={0.7}
-                  >
-                    <MaterialIcons name="list-alt" size={20} color="#78909C" style={{ marginRight: 14 }} />
-                    <View style={styles.settingContent}>
-                      <Text style={styles.settingLabel}>jAccount 诊断</Text>
-                      <Text style={styles.settingDesc}>检测凭据与登录状态</Text>
+            </View>
+          </View>
+        ))}
+        {/* 开发者功能和绝密功能（仅在开启后显示） */}
+        {getDevSections(devModeEnabled, topSecretEnabled).map((section, si) => (
+          <View key={`dev-${si}`} style={styles.section}>
+            <Text style={styles.sectionTitle}>{section.title}</Text>
+            <View style={styles.sectionCard}>
+              {section.items.map((item, ii) => (
+                <View key={item.key}>
+                  {item.key === 'topSecretFeature' ? (
+                    <View style={[styles.settingRow, ii < section.items.length - 1 && styles.settingRowBorder]}>
+                      <MaterialIcons name="verified" size={20} color="#1B5E20" style={{ marginRight: 14 }} />
+                      <View style={styles.settingContent}>
+                        <Text style={[styles.settingLabel, { color: '#1B5E20' }]}>绝密功能</Text>
+                        <Text style={styles.settingDesc}>{topSecretEnabled ? '已开启' : '设备验证后开启'}</Text>
+                      </View>
+                      <Switch
+                        value={topSecretEnabled}
+                        onValueChange={() => handlePress('topSecretFeature')}
+                        trackColor={{ false: '#EEE', true: '#A5D6A7' }}
+                        thumbColor={topSecretEnabled ? '#1B5E20' : '#EEE'}
+                      />
                     </View>
-                    <MaterialIcons name="chevron-right" size={20} color="#CCC" />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.settingRow, styles.settingRowBorder]}
-                    onPress={() => handlePress('calendarCacheStatus')}
-                    activeOpacity={0.7}
-                  >
-                    <MaterialIcons name="calendar-today" size={20} color="#78909C" style={{ marginRight: 14 }} />
-                    <View style={styles.settingContent}>
-                      <Text style={styles.settingLabel}>校历缓存诊断</Text>
-                      <Text style={styles.settingDesc}>查看本地校历缓存状态</Text>
-                    </View>
-                    <MaterialIcons name="chevron-right" size={20} color="#CCC" />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.settingRow, styles.settingRowBorder]}
-                    onPress={() => handlePress('crazyThursdayStatus')}
-                    activeOpacity={0.7}
-                  >
-                    <MaterialIcons name="celebration" size={20} color="#FF6F00" style={{ marginRight: 14 }} />
-                    <View style={styles.settingContent}>
-                      <Text style={styles.settingLabel}>Crazy Thursday 诊断</Text>
-                      <Text style={styles.settingDesc}>调试彩蛋显示条件</Text>
-                    </View>
-                    <MaterialIcons name="chevron-right" size={20} color="#CCC" />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.settingRow, styles.settingRowBorder]}
-                    onPress={() => handlePress('mailDiagnose')}
-                    activeOpacity={0.7}
-                  >
-                    <MaterialIcons name="email" size={20} color="#1A73E8" style={{ marginRight: 14 }} />
-                    <View style={styles.settingContent}>
-                      <Text style={styles.settingLabel}>邮箱诊断</Text>
-                      <Text style={styles.settingDesc}>调试邮箱认证流程</Text>
-                    </View>
-                    <MaterialIcons name="chevron-right" size={20} color="#CCC" />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.settingRow, styles.settingRowBorder]}
-                    onPress={() => handlePress('mailSuggestTest')}
-                    activeOpacity={0.7}
-                  >
-                    <MaterialIcons name="people-outline" size={20} color="#7B1FA2" style={{ marginRight: 14 }} />
-                    <View style={styles.settingContent}>
-                      <Text style={styles.settingLabel}>邮件联想诊断</Text>
-                      <Text style={styles.settingDesc}>测试收件人自动联想功能</Text>
-                    </View>
-                    <MaterialIcons name="chevron-right" size={20} color="#CCC" />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.settingRow, styles.settingRowBorder]}
-                    onPress={() => handlePress('notifTest')}
-                    activeOpacity={0.7}
-                  >
-                    <MaterialIcons name="notifications" size={20} color="#1565C0" style={{ marginRight: 14 }} />
-                    <View style={styles.settingContent}>
-                      <Text style={styles.settingLabel}>教务通知诊断</Text>
-                      <Text style={styles.settingDesc}>调试 i.sjtu 通知拉取与解析</Text>
-                    </View>
-                    <MaterialIcons name="chevron-right" size={20} color="#CCC" />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.settingRow, styles.settingRowBorder]}
-                    onPress={() => handlePress('testNotif')}
-                    activeOpacity={0.7}
-                  >
-                    <MaterialIcons name="notifications-active" size={20} color="#E53935" style={{ marginRight: 14 }} />
-                    <View style={styles.settingContent}>
-                      <Text style={styles.settingLabel}>测试通知</Text>
-                      <Text style={styles.settingDesc}>发送本地测试通知（验证通知权限）</Text>
-                    </View>
-                    <MaterialIcons name="chevron-right" size={20} color="#CCC" />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.settingRow, styles.settingRowBorder]}
-                    onPress={async () => {
-                      const guide = getBatteryOptimizationGuide();
-                      const devInfo = getDeviceInfoString();
-                      setBatteryGuideData({
-                        title: `电池优化检测（${guide.brand}）`,
-                        steps: guide.guideSteps,
-                        deviceInfo: devInfo,
-                      });
-                      setShowBatteryGuideModal(true);
-                    }}
-                    activeOpacity={0.7}
-                  >
-                    <MaterialIcons name="battery-saver" size={20} color="#FF6F00" style={{ marginRight: 14 }} />
-                    <View style={styles.settingContent}>
-                      <Text style={styles.settingLabel}>电池优化检测</Text>
-                      <Text style={styles.settingDesc}>查看本机后台白名单设置步骤</Text>
-                    </View>
-                    <MaterialIcons name="chevron-right" size={20} color="#CCC" />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.settingRow, styles.settingRowBorder]}
-                    onPress={() => handlePress('semesterDebug')}
-                    activeOpacity={0.7}
-                  >
-                    <MaterialIcons name="calendar-month" size={20} color="#E65100" style={{ marginRight: 14 }} />
-                    <View style={styles.settingContent}>
-                      <Text style={styles.settingLabel}>校历匹配诊断</Text>
-                      <Text style={styles.settingDesc}>查看学期缓存与日期推算详情</Text>
-                    </View>
-                    <MaterialIcons name="chevron-right" size={20} color="#CCC" />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.settingRow, styles.settingRowBorder]}
-                    onPress={() => handlePress('pinnedCacheTest')}
-                    activeOpacity={0.7}
-                  >
-                    <MaterialIcons name="bookmark" size={20} color="#E65100" style={{ marginRight: 14 }} />
-                    <View style={styles.settingContent}>
-                      <Text style={styles.settingLabel}>置顶缓存测试</Text>
-                      <Text style={styles.settingDesc}>测试仅从本地缓存渲染置顶项</Text>
-                    </View>
-                    <MaterialIcons name="chevron-right" size={20} color="#CCC" />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.settingRow, styles.settingRowBorder]}
-                    onPress={() => handlePress('renderTest')}
-                    activeOpacity={0.7}
-                  >
-                    <MaterialIcons name="format-paint" size={20} color="#FF6F00" style={{ marginRight: 14 }} />
-                    <View style={styles.settingContent}>
-                      <Text style={styles.settingLabel}>渲染测试</Text>
-                      <Text style={styles.settingDesc}>预览各卡片超长名称渲染效果</Text>
-                    </View>
-                    <MaterialIcons name="chevron-right" size={20} color="#CCC" />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.settingRow, styles.settingRowBorder]}
-                    onPress={() => {
-                      setClearState('confirm');
-                      setShowClearModal(true);
-                    }}
-                    activeOpacity={0.7}
-                  >
-                    <MaterialIcons name="delete-sweep" size={20} color="#E53935" style={{ marginRight: 14 }} />
-                    <View style={styles.settingContent}>
-                      <Text style={[styles.settingLabel, { color: '#E53935' }]}>清除所有本地数据</Text>
-                      <Text style={styles.settingDesc}>模拟新用户，此操作不可撤销</Text>
-                    </View>
-                    <MaterialIcons name="chevron-right" size={20} color="#CCC" />
-                  </TouchableOpacity>
+                  ) : item.key === 'clearData' ? (
+                    <TouchableOpacity
+                      style={[styles.settingRow, ii < section.items.length - 1 && styles.settingRowBorder]}
+                      onPress={() => { setClearState('confirm'); setShowClearModal(true); }}
+                      activeOpacity={0.7}
+                    >
+                      <MaterialIcons name="delete-sweep" size={20} color="#E53935" style={{ marginRight: 14 }} />
+                      <View style={styles.settingContent}>
+                        <Text style={[styles.settingLabel, { color: '#E53935' }]}>{item.label}</Text>
+                        <Text style={styles.settingDesc}>{item.desc}</Text>
+                      </View>
+                      <MaterialIcons name="chevron-right" size={20} color="#CCC" />
+                    </TouchableOpacity>
+                  ) : item.key === 'batteryGuide' ? (
+                    <TouchableOpacity
+                      style={[styles.settingRow, ii < section.items.length - 1 && styles.settingRowBorder]}
+                      onPress={async () => {
+                        const guide = getBatteryOptimizationGuide();
+                        const devInfo = getDeviceInfoString();
+                        setBatteryGuideData({
+                          title: `电池优化检测（${guide.brand}）`,
+                          steps: guide.guideSteps,
+                          deviceInfo: devInfo,
+                        });
+                        setShowBatteryGuideModal(true);
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <MaterialIcons name="battery-saver" size={20} color="#FF6F00" style={{ marginRight: 14 }} />
+                      <View style={styles.settingContent}>
+                        <Text style={styles.settingLabel}>{item.label}</Text>
+                        <Text style={styles.settingDesc}>{item.desc}</Text>
+                      </View>
+                      <MaterialIcons name="chevron-right" size={20} color="#CCC" />
+                    </TouchableOpacity>
+                  ) : (
+                    <TouchableOpacity
+                      style={[styles.settingRow, ii < section.items.length - 1 && styles.settingRowBorder]}
+                      onPress={() => handlePress(item.key)}
+                      activeOpacity={0.7}
+                    >
+                      <MaterialIcons name={item.icon} size={20} color={SETTING_ICON_COLORS[item.key] || '#78909C'} style={{ marginRight: 14 }} />
+                      <View style={styles.settingContent}>
+                        <Text style={styles.settingLabel}>{item.label}</Text>
+                        <Text style={styles.settingDesc}>{item.desc}</Text>
+                      </View>
+                      <MaterialIcons name="chevron-right" size={20} color="#CCC" />
+                    </TouchableOpacity>
+                  )}
                 </View>
-              )}
+              ))}
             </View>
           </View>
         ))}
@@ -1255,6 +1271,8 @@ export const SettingsScreen = ({ navigation }: any) => {
                 <TouchableOpacity onPress={() => {
                   setDevModeEnabled(false);
                   persistDevModeEnabled(false);
+                  setTopSecretEnabled(false);
+                  persistTopSecretEnabled(false);
                   setShowCloseDevModal(false);
                 }} style={[styles.modalConfirmBtn, { backgroundColor: '#E53935' }]} activeOpacity={0.7}>
                   <Text style={styles.modalConfirmText}>关闭</Text>
