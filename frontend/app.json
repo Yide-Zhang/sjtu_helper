@@ -27,12 +27,13 @@
         }
       ],
       "onnxruntime-react-native",
-      "expo-asset"
+      "expo-asset",
+      "expo-font"
     ],
     "web": {
       "favicon": "./assets/favicon.png"
     },
-      "newArchEnabled": false,
+    "newArchEnabled": false,
     "extra": {
       "eas": {
         "projectId": "f5545ea0-9c19-4812-8331-2eaa5877f7c3"
