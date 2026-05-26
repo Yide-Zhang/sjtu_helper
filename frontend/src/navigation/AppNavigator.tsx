@@ -20,6 +20,10 @@ import { NotifScreen } from '../screens/NotifScreen';
 import { WebViewScreen } from '../screens/WebViewScreen';
 import { RenderTestScreen } from '../screens/RenderTestScreen';
 import { CourseCommunityScreen } from '../screens/CourseCommunityScreen';
+import { CommunityReviewScreen } from '../screens/CommunityReviewScreen';
+import { SectionOrderScreen } from '../screens/SectionOrderScreen';
+import { AlgorithmHelpScreen } from '../screens/AlgorithmHelpScreen';
+import { FavoritesScreen } from '../screens/FavoritesScreen';
 import { ActivityIndicator, View } from 'react-native';
 
 const Stack = createNativeStackNavigator();
@@ -120,6 +124,22 @@ export const AppNavigator = () => {
         <Stack.Screen 
           name="CourseCommunity" 
           component={CourseCommunityScreen} 
+        />
+        <Stack.Screen 
+          name="CommunityReview" 
+          component={CommunityReviewScreen} 
+        />
+        <Stack.Screen 
+          name="SectionOrder" 
+          component={SectionOrderScreen} 
+        />
+        <Stack.Screen 
+          name="AlgorithmHelp" 
+          component={AlgorithmHelpScreen} 
+        />
+        <Stack.Screen 
+          name="Favorites" 
+          component={FavoritesScreen} 
         />
         <Stack.Screen 
           name="RenderTest" 

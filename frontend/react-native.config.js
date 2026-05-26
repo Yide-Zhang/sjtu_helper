@@ -1,4 +1,5 @@
 module.exports = {
+  assets: ['./node_modules/react-native-vector-icons/Fonts'],
   dependencies: {
     'onnxruntime-react-native': {
       root: './node_modules/onnxruntime-react-native',

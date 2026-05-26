@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Image, Scr
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getToken, getJAccountUsername, getJAccountPassword, getDevModeEnabled, getCrazyThursdayEnabled, isCrazyThursdayDismissedThisWeek, dismissCrazyThursdayThisWeek, hasShownCrazyThursdayFirstGuide, markCrazyThursdayFirstGuideShown, EXAM_CACHE_PREFIX, getAssignmentsCache, setAssignmentsCache, isAssignmentsCacheFresh } from '../utils/storage';
+import { getToken, getJAccountUsername, getJAccountPassword, getDevModeEnabled, getCrazyThursdayEnabled, isCrazyThursdayDismissedThisWeek, dismissCrazyThursdayThisWeek, hasShownCrazyThursdayFirstGuide, markCrazyThursdayFirstGuideShown, EXAM_CACHE_PREFIX, getAssignmentsCache, setAssignmentsCache, isAssignmentsCacheFresh, getSectionPriorities } from '../utils/storage';
 import { checkJAccountSession, fetchExamJSON, fetchWeeklyScheduleJSON } from '../api/jaccount';
 import { fetchAllUpcomingAssignments, CanvasAssignment } from '../api/canvas';
 import { ensureMailAuth, fetchInbox, ZimbraMessage } from '../api/mail';
@@ -14,6 +14,14 @@ import { getCache, setCache, clearCache } from '../utils/cache';
 import { getCourseColor } from '../utils/colors';
 import { AssignmentSummaryCard } from '../components/CardViews';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
+import { ScheduleSection } from '../sections/ScheduleSection';
+import { AnnouncementSection } from '../sections/AnnouncementSection';
+import { NotifSection } from '../sections/NotifSection';
+import { MailSection } from '../sections/MailSection';
+import { AssignmentSection } from '../sections/AssignmentSection';
+import { ExamSection } from '../sections/ExamSection';
+import { CommunitySection } from '../sections/CommunitySection';
+import { DynamicTwoCol, DynamicSection } from '../sections/DynamicTwoCol';
 
 const USER_NAME_KEY = 'USER_NAME';
 
@@ -105,6 +113,8 @@ export const MainScreen = ({ navigation }: any) => {
   const [isjtuNotices, setIsjtuNotices] = useState<IsjtuNotice[]>([]);
   const [pinnedXuanKe, setPinnedXuanKe] = useState<JwcNotice | null>(null);
   const [pingJiaoNotice, setPingJiaoNotice] = useState<JwcNotice | null>(null);
+  const [priorities, setPriorities] = useState<Record<string, number>>({});
+  const prioritiesLoaded = useRef(false);
   const [jwcLoading, setJwcLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -133,24 +143,19 @@ export const MainScreen = ({ navigation }: any) => {
         const isAlive = await checkJAccountSession();
         setJaccountSessionAlive(isAlive);
         if (!isAlive) {
-          // 自动重登录 i.sjtu（最多 3 次）
+          // 用 ensureJAccountLogin 自动重登录（不依赖验证码）
           let loginSuccess = false;
-          const { autoLoginJAccount } = await import('../api/jaccount');
-          for (let attempt = 0; attempt < 3; attempt++) {
-            const result = await autoLoginJAccount();
-            if (result.success) { loginSuccess = true; break; }
-            if (result.reason === 'WRONG_USER_OR_PASSWORD') break; // 凭据错误无需重试
-            if (attempt < 2) await new Promise(r => setTimeout(r, 1500));
-          }
+          try {
+            const { ensureJAccountLogin } = await import('../api/jaccount');
+            loginSuccess = await ensureJAccountLogin();
+          } catch {}
           setJaccountSessionAlive(loginSuccess);
           if (loginSuccess) {
-            // jAccount 重登录成功 → 清空邮箱旧凭证，确保后续强制走完整认证
+            // jAccount 重登录成功 → 清空邮箱旧凭证
             await removeMailCsrfToken().catch(() => {});
             await removeMailAuthToken().catch(() => {});
-          } else {
-            // 自动登录全部失败，导航到 WebView 登录页
-            navigation.navigate('JAccountLogin', { mode: 'auto' });
           }
+          // 登录失败不导航，由 UI 展示"登录失效"让用户手动点击
         }
       } else {
         setJaccountSessionAlive(null);
@@ -182,6 +187,8 @@ export const MainScreen = ({ navigation }: any) => {
   }, []);
 
   useFocusEffect(useCallback(() => {
+    // 每次聚焦时重置检测锁，确保凭证失效后能重新登录
+    checkingRef.current = false;
     refreshSessionState();
     loadPersistentCache();
     checkCrazyThursday();
@@ -264,7 +271,7 @@ export const MainScreen = ({ navigation }: any) => {
         k.startsWith('EXAM_CACHE_') ||
         k === 'JWC_NOTICES_CACHE'
       );
-      if (removeKeys.length > 0) await AsyncStorage.removeMany(removeKeys);
+      if (removeKeys.length > 0) await AsyncStorage.multiRemove(removeKeys);
       await Promise.all([
         loadAssignmentsSummary(),
         loadAnnouncementsSummary(),
@@ -592,6 +599,62 @@ export const MainScreen = ({ navigation }: any) => {
     } catch { /* ignore */ }
   };
 
+  // ── 加载自定义优先级 ──
+  useEffect(() => {
+    (async () => {
+      const p = await getSectionPriorities();
+      setPriorities(p);
+      prioritiesLoaded.current = true;
+    })();
+  }, []);
+  useFocusEffect(useCallback(() => {
+    (async () => {
+      const p = await getSectionPriorities();
+      setPriorities(p);
+    })();
+  }, []));
+
+  const sections = React.useMemo<DynamicSection[]>(() => {
+    const p = Object.keys(priorities).length > 0 ? priorities : undefined;
+    const pri = (id: string, fallback: number) => p?.[id] ?? fallback;
+    return [
+    {
+      id: "schedule",
+      priority: pri("schedule", 1),
+      render: () => <ScheduleSection navigation={navigation} hasJAccountCreds={hasJAccountCreds} jaccountSessionAlive={jaccountSessionAlive} scheduleInfo={scheduleInfo} scheduleDetail={scheduleDetail} scheduleBadge={scheduleBadge} scheduleCourse={scheduleCourse} nextCourseName={nextCourseName} nextCourseDetail={nextCourseDetail} />,
+    },
+    {
+      id: "announce",
+      priority: pri("announce", 3),
+      render: () => <AnnouncementSection navigation={navigation} hasCanvasToken={hasCanvasToken} recentAnnouncement={recentAnnouncement} />,
+    },
+    {
+      id: "notif",
+      priority: pri("notif", 5),
+      render: () => <NotifSection navigation={navigation} pinnedXuanKe={pinnedXuanKe} jwcNotices={jwcNotices} isjtuNotices={isjtuNotices} />,
+    },
+    {
+      id: "mail",
+      priority: pri("mail", 6),
+      render: () => <MailSection navigation={navigation} hasJAccountCreds={hasJAccountCreds} mailChecking={mailChecking} mailAuthed={mailAuthed} mailUnread={mailUnread} mailLatest={mailLatest} />,
+    },
+    {
+      id: "assignments",
+      priority: pri("assignments", 2),
+      render: () => <AssignmentSection navigation={navigation} hasCanvasToken={hasCanvasToken} upcomingAssigns={upcomingAssigns} />,
+    },
+    {
+      id: "exams",
+      priority: pri("exams", 4),
+      render: () => <ExamSection navigation={navigation} hasJAccountCreds={hasJAccountCreds} upcomingExams={upcomingExams} />,
+    },
+    {
+      id: "community",
+      priority: pri("community", 7),
+      render: () => <CommunitySection navigation={navigation} />,
+    },
+  ];}, [hasJAccountCreds, jaccountSessionAlive, hasCanvasToken, scheduleInfo, scheduleDetail, scheduleBadge, scheduleCourse, nextCourseName, nextCourseDetail, upcomingAssigns, upcomingExams, recentAnnouncement, pinnedXuanKe, jwcNotices, isjtuNotices, mailUnread, mailChecking, mailAuthed, mailLatest, priorities]);
+
   return (
     <View style={{ flex: 1, position: 'relative' }}>
     <ScrollView style={[styles.safeArea, { paddingTop: insets.top }]} contentContainerStyle={{ paddingBottom: insets.bottom + 60 }} showsVerticalScrollIndicator={false}
@@ -608,10 +671,6 @@ export const MainScreen = ({ navigation }: any) => {
       </View>
       {devMode && (
         <View style={{ flexDirection: 'row', paddingHorizontal: 20, marginTop: 4, gap: 10 }}>
-          <TouchableOpacity onPress={() => navigation.navigate('CourseCommunity')} style={styles.communityBtn} activeOpacity={0.7}>
-            <MaterialIcons name="forum" size={16} color="#FFF" />
-            <Text style={styles.communityBtnText}>选课社区</Text>
-          </TouchableOpacity>
         </View>
       )}
 
@@ -622,7 +681,6 @@ export const MainScreen = ({ navigation }: any) => {
       ) : (
         <View style={styles.sections}>
 
-          {/* 双列布局：每列连续排列 */}
           {pingJiaoNotice && (
             <TouchableOpacity
               style={[styles.section, { backgroundColor: '#F3E5F6', borderWidth: 1.5, borderColor: '#6A1B9A', marginBottom: 10 }]}
@@ -648,334 +706,9 @@ export const MainScreen = ({ navigation }: any) => {
               </View>
             </TouchableOpacity>
           )}
-          <View style={styles.twoCol}>
-            {/* 左列：课表 → 考试 → 邮箱 */}
-            <View style={styles.col}>
-              {/* ── 课表 ── */}
-              <TouchableOpacity style={styles.section} onPress={hasJAccountCreds ? () => navigation.navigate('Schedule') : () => navigation.navigate('Settings')} activeOpacity={0.7}>
-                <View style={styles.sectionHeader}>
-                  <MaterialIcons name="calendar-today" size={16} color="#4CAF50" />
-                  <Text style={styles.sectionTitle}>课表</Text>
-                </View>
-                {/* "今天的课都上完了~" 直接渲染在背景色块上，不带白色卡片 */}
-                {scheduleInfo === '今天的课都上完了~' || scheduleInfo === '今天没课~' ? (
-                  <>
-                    <Text style={[styles.cmain, { paddingHorizontal: 2 }]}>{scheduleInfo}</Text>
-                    {scheduleDetail === '这是今天最后一节课啦~' ? <Text style={[styles.csub, { paddingHorizontal: 2 }]}>{scheduleDetail}</Text> : null}
-                  </>
-                ) : scheduleBadge === '现在' && nextCourseName ? (
-                  // 同时在上下课：两个独立卡片，不嵌套外层 sectionCard
-                  <>
-                    <View style={styles.sectionCard}>
-                      <View style={styles.scheduleRow}>
-                        <View style={[styles.scheduleBadge, styles.scheduleBadgeNow]}>
-                          <Text style={styles.scheduleBadgeText}>现在</Text>
-                        </View>
-                        <Text style={[styles.cmain, { flexShrink: 1 }]} numberOfLines={2} ellipsizeMode="tail">{scheduleCourse}</Text>
-                      </View>
-                    </View>
-                    <View style={[styles.sectionCard, { marginTop: 6 }]}>
-                      <View style={styles.scheduleRow}>
-                        <View style={[styles.scheduleBadge, styles.scheduleBadgeNext]}>
-                          <Text style={styles.scheduleBadgeText}>下节</Text>
-                        </View>
-                        <Text style={[styles.cmain, { flexShrink: 1 }]} numberOfLines={2} ellipsizeMode="tail">{nextCourseName}</Text>
-                      </View>
-                      {nextCourseDetail ? <Text style={[styles.csub, { marginTop: 4 }]} numberOfLines={1} ellipsizeMode="tail">{nextCourseDetail}</Text> : null}
-                    </View>
-                  </>
-                ) : scheduleBadge === '现在' && scheduleDetail === '这是今天最后一节课啦~' ? (
-                  // 现在是最后一节课：卡片 + 底部衬块文字
-                  <>
-                    <View style={styles.sectionCard}>
-                      <View style={styles.scheduleRow}>
-                        <View style={[styles.scheduleBadge, styles.scheduleBadgeNow]}>
-                          <Text style={styles.scheduleBadgeText}>现在</Text>
-                        </View>
-                        <Text style={[styles.cmain, { flexShrink: 1 }]} numberOfLines={2} ellipsizeMode="tail">{scheduleCourse}</Text>
-                      </View>
-                    </View>
-                    <Text style={[styles.csub, { paddingHorizontal: 2, marginTop: 6 }]}>{scheduleDetail}</Text>
-                  </>
-                ) : (
-                <View style={styles.sectionCard}>
-                  {hasJAccountCreds === false ? (
-                    <View style={styles.guideRow}>
-                      <MaterialIcons name="info-outline" size={14} color="#FF8C00" style={{ marginRight: 4 }} />
-                      <Text style={styles.guideText}>未设置 jAccount，前去填写</Text>
-                    </View>
-                  ) : jaccountSessionAlive === false ? (
-                    <TouchableOpacity style={styles.guideRow} onPress={() => navigation.navigate('Settings')} activeOpacity={0.7}>
-                      <MaterialIcons name="sync-problem" size={14} color="#E53935" style={{ marginRight: 4 }} />
-                      <Text style={[styles.guideText, { color: '#E53935' }]}>登录失效，点击检查凭据</Text>
-                    </TouchableOpacity>
-                  ) : scheduleBadge ? (
-                    <View style={styles.scheduleRow}>
-                      <View style={[styles.scheduleBadge, scheduleBadge === '现在' ? styles.scheduleBadgeNow : styles.scheduleBadgeNext]}>
-                        <Text style={styles.scheduleBadgeText}>{scheduleBadge}</Text>
-                      </View>
-                      <Text style={[styles.cmain, { flexShrink: 1 }]} numberOfLines={2} ellipsizeMode="tail">{scheduleCourse}</Text>
-                    </View>
-                  ) : (
-                    <Text style={styles.cmain} numberOfLines={1} ellipsizeMode="tail">{scheduleInfo}</Text>
-                  )}
-                  {scheduleDetail && scheduleDetail !== '这是今天最后一节课啦~' ? <Text style={styles.csub} numberOfLines={1} ellipsizeMode="tail">{scheduleDetail}</Text> : null}
-                </View>
-                )}
-              </TouchableOpacity>
+          <DynamicTwoCol sections={sections} twoColStyle={styles.twoCol} colStyle={styles.col} />
 
-              {/* ── 考试 ── */}
-              <TouchableOpacity style={styles.section} onPress={() => navigation.navigate('Exams')} activeOpacity={0.7}>
-                <View style={styles.sectionHeader}>
-                  <MaterialIcons name="edit-note" size={16} color="#E65100" />
-                  <Text style={styles.sectionTitle}>考试</Text>
-                </View>
-                {hasJAccountCreds === false ? (
-                  <View style={styles.sectionCard}>
-                    <View style={styles.guideRow}>
-                      <MaterialIcons name="info-outline" size={14} color="#FF8C00" style={{ marginRight: 4 }} />
-                      <Text style={styles.guideText}>未设置 jAccount，前去填写</Text>
-                    </View>
-                  </View>
-                ) : upcomingExams.length === 0 ? (
-                  <View style={styles.sectionCard}><Text style={styles.cmain}>本学期暂无考试</Text></View>
-                ) : upcomingExams.map((e, i) => {
-                    const t = safeTime(e.kssj), d = t !== Infinity ? new Date(t) : null;
-                    const timeRange = e.kssj?.match(/\((\d{2}:\d{2}-\d{2}:\d{2})\)/)?.[1] || '';
-                    const examUrgency = getExamUrgency(e.kssj);
-                    const examGlowColor = EXAM_URGENCY_COLORS[examUrgency];
-                    return (
-                      <View key={i} style={[styles.examGlowWrapper, i < upcomingExams.length - 1 && { marginBottom: 6 }]}>
-                        {examUrgency !== 'none' && (
-                          <View style={[styles.examPureColorBase, { backgroundColor: examGlowColor }]} />
-                        )}
-                        <View style={styles.sectionCard}>
-                          <View style={[styles.courseBadgeSmall, { backgroundColor: getCourseColor(e.kcmc) }]}>
-                            <Text style={styles.courseBadgeText} numberOfLines={1}>{e.kcmc}</Text>
-                          </View>
-                          <View style={styles.examMetaRow}>
-                            <Text style={styles.csub}>{d ? `${d.getMonth() + 1}/${d.getDate()}` : ''}</Text>
-                            {timeRange ? <Text style={styles.csub}>{timeRange}</Text> : null}
-                          </View>
-                          {e.cdmc ? <Text style={styles.clocation}>{e.cdmc}</Text> : null}
-                        </View>
-                      </View>
-                    );
-                  })}
-              </TouchableOpacity>
-
-              {/* ── 邮箱 ── */}
-              <TouchableOpacity style={styles.section} onPress={hasJAccountCreds ? () => navigation.navigate('Mail') : () => navigation.navigate('Settings')} activeOpacity={0.7}>
-                <View style={styles.sectionHeader}>
-                  <MaterialIcons name="email" size={16} color="#1A73E8" />
-                  <Text style={styles.sectionTitle}>邮箱</Text>
-                  {mailUnread > 0 && (
-                    <View style={styles.unreadBadge}>
-                      <Text style={styles.unreadBadgeText}>{mailUnread > 99 ? '99+' : mailUnread}</Text>
-                    </View>
-                  )}
-                </View>
-                <View style={styles.sectionCard}>
-                  {hasJAccountCreds === false ? (
-                    <View style={styles.guideRow}>
-                      <MaterialIcons name="info-outline" size={14} color="#FF8C00" style={{ marginRight: 4 }} />
-                      <Text style={styles.guideText}>未设置 jAccount，前去填写</Text>
-                    </View>
-                  ) : mailChecking ? (
-                    <View style={styles.guideRow}>
-                      <ActivityIndicator size="small" color="#1A73E8" style={{ marginRight: 6 }} />
-                      <Text style={styles.guideText}>正在登录邮箱...</Text>
-                    </View>
-                  ) : !mailAuthed ? (
-                    <View style={styles.guideRow}>
-                      <MaterialIcons name="sync-problem" size={14} color="#E53935" style={{ marginRight: 4 }} />
-                      <Text style={styles.guideText}>邮箱登录失败，请检查凭据</Text>
-                    </View>
-                  ) : mailLatest ? (
-                    <>
-                      <View style={styles.mailFromRow}>
-                        <View style={[styles.mailDot, mailLatest.flags?.includes('u') && styles.mailDotUnread]} />
-                        <Text style={[styles.citem, mailLatest.flags?.includes('u') && { fontWeight: '700' }]} numberOfLines={1}>
-                          {mailLatest.from.name || mailLatest.from.address}
-                        </Text>
-                      </View>
-                      <Text style={styles.csub} numberOfLines={1}>{mailLatest.subject}</Text>
-                    </>
-                  ) : (
-                    <Text style={styles.cmain}>暂无邮件</Text>
-                  )}
-                </View>
-              </TouchableOpacity>
-            </View>
-
-            {/* 右列：公告 → 作业 */}
-            <View style={styles.col}>
-              {/* ── 公告 ── */}
-              <TouchableOpacity style={styles.section} onPress={hasCanvasToken ? () => navigation.navigate('Announcements') : () => navigation.navigate('Settings')} activeOpacity={0.7}>
-                <View style={styles.sectionHeader}>
-                  <MaterialIcons name="campaign" size={16} color="#E65100" />
-                  <Text style={styles.sectionTitle}>公告</Text>
-                </View>
-                <View style={styles.sectionCard}>
-                  {hasCanvasToken === false ? (
-                    <View style={styles.guideRow}>
-                      <MaterialIcons name="info-outline" size={14} color="#FF8C00" style={{ marginRight: 4 }} />
-                      <Text style={styles.guideText}>未设置 Canvas Token，前去填写</Text>
-                    </View>
-                  ) : recentAnnouncement ? (
-                    <>
-                      <Text style={styles.citem}>{recentAnnouncement.name?.substring(0, 30)}</Text>
-                      {recentAnnouncement.course_name ? <Text style={styles.csub}>{recentAnnouncement.course_name}</Text> : null}
-                    </>
-                  ) : (
-                    <Text style={styles.cmain}>浏览课程公告与通知</Text>
-                  )}
-                </View>
-              </TouchableOpacity>
-
-              {/* ── 作业 ── */}
-              <TouchableOpacity style={styles.section} onPress={() => navigation.navigate('Assignments')} activeOpacity={0.7}>
-                <View style={styles.sectionHeader}>
-                  <MaterialIcons name="list-alt" size={16} color="#0055A8" />
-                  <Text style={styles.sectionTitle}>作业</Text>
-                </View>
-                {hasCanvasToken === false ? (
-                  <View style={styles.sectionCard}>
-                    <View style={styles.guideRow}>
-                      <MaterialIcons name="info-outline" size={14} color="#FF8C00" style={{ marginRight: 4 }} />
-                      <Text style={styles.guideText}>未设置 Canvas Token，前去填写</Text>
-                    </View>
-                  </View>
-                ) : upcomingAssigns.length === 0 ? (
-                  <View style={styles.sectionCard}><Text style={styles.cmain}>暂无待办作业</Text></View>
-                ) : upcomingAssigns.map((a, i) => {
-                    const dueTime = a.display_date ? new Date(a.display_date).getTime() : Infinity;
-                    const diff = dueTime - Date.now();
-                    let assignUrgency: ExamUrgency = 'none';
-                    if (dueTime !== Infinity && diff > 0) {
-                      const hours = diff / (1000 * 60 * 60);
-                      if (hours <= 1) assignUrgency = 'red';
-                      else if (hours <= 24) assignUrgency = 'orange';
-                      else if (hours <= 72) assignUrgency = 'yellow';
-                    }
-                    return (
-                      <View key={i} style={i < upcomingAssigns.length - 1 ? { marginBottom: 6 } : undefined}>
-                        <AssignmentSummaryCard
-                          course={a.course_name || '未知课程'}
-                          name={a.name || '未命名作业'}
-                          dateDiff={formatDateDiff(a.display_date!)}
-                          courseColor={getCourseColor(a.course_name)}
-                          urgency={assignUrgency}
-                        />
-                      </View>
-                    );
-                  })}
-              </TouchableOpacity>
-
-              {/* ── 教务通知 ── */}
-              <TouchableOpacity style={styles.section} onPress={() => navigation.navigate('Notif')} activeOpacity={0.7}>
-                <View style={styles.sectionHeader}>
-                  <MaterialIcons name="school" size={16} color="#7B1FA2" />
-                  <Text style={styles.sectionTitle}>教务通知</Text>
-                  <MaterialIcons name="chevron-right" size={18} color="#999" style={{ marginLeft: 'auto' }} />
-                </View>
-                {pinnedXuanKe?.xuankeInfo ? (
-                  <>
-                    {/* 置顶选课通知 —— 纯展示，不可单独点击 */}
-                    <View style={[styles.sectionCard, { borderLeftWidth: 3, borderLeftColor: '#E65100', marginBottom: 6 }]}>
-                      <View style={styles.notifItemRow}>
-                        <MaterialIcons name="bookmark" size={14} color="#E65100" style={{ marginRight: 4 }} />
-                        <Text style={[styles.citem, { fontWeight: '700', color: '#E65100' }]}>选课通知</Text>
-                        <View style={[styles.notifBadge, { backgroundColor: '#FFF3E0' }]}>
-                          <Text style={[styles.notifBadgeText, { color: '#E65100', fontSize: 10 }]}>置顶</Text>
-                        </View>
-                      </View>
-                      <Text style={[styles.csub, { fontWeight: '600', marginTop: 4 }]}>{pinnedXuanKe.xuankeInfo.academicYear} {pinnedXuanKe.xuankeInfo.seasonCn}选课</Text>
-                      {pinnedXuanKe.xuankeInfo.rounds.slice(0, 2).map((r, i) => (
-                        <View key={i} style={{ marginTop: 2 }}>
-                          <Text style={[styles.csub, { fontSize: 11, color: '#888' }]}>
-                            {r.round}：{r.start.substring(5, 10)} {r.start.substring(11, 16)} 至
-                          </Text>
-                          <Text style={[styles.csub, { fontSize: 11, color: '#888', paddingLeft: 0 }]}>
-                            {r.end.substring(5, 10)} {r.end.substring(11, 16)}
-                          </Text>
-                        </View>
-                      ))}
-                      {pinnedXuanKe.xuankeInfo.rounds.length > 2 && (
-                        <Text style={[styles.csub, { fontSize: 11, color: '#999', marginTop: 2, fontStyle: 'italic' }]}>{'<点击查看详细>'}</Text>
-                      )}
-                    </View>
-                    {/* 最新一条非置顶 —— 纯展示 */}
-                    {(() => {
-                      const others: { id: string; title: string; date: string; url?: string; badge?: string; badgeColor?: string }[] = [];
-                      for (const n of jwcNotices) {
-                        if (n.id === pinnedXuanKe.id) continue;
-                        others.push({ id: 'jwc_' + n.id, title: n.title, date: n.date, url: n.url, badge: n.isXuanKe ? '选课' : undefined, badgeColor: '#2E7D32' });
-                      }
-                      for (const n of isjtuNotices) {
-                        others.push({ id: 'isjtu_' + n.id, title: n.title, date: n.time?.substring(0, 10) || '', badge: n.isTiaoKe ? '调课' : undefined, badgeColor: '#E65100' });
-                      }
-                      others.sort((a, b) => b.date.localeCompare(a.date));
-                      const top = others[0];
-                      if (!top) return null;
-                      return (
-                        <TouchableOpacity
-                          style={styles.notifMinorCard}
-                          activeOpacity={0.7}
-                          onPress={() => {
-                            if (top.url && !top.badge) { navigation.navigate('WebView', { url: top.url, title: '教务通知' }); }
-                            else { navigation.navigate('Notif'); }
-                          }}
-                        >
-                          <View style={styles.notifItemRow}>
-                            <Text style={styles.citem} numberOfLines={1}>{top.title}</Text>
-                            {top.badge && (
-                              <View style={[styles.notifBadge, { backgroundColor: (top.badgeColor || '#999') + '18' }]}>
-                                <Text style={[styles.notifBadgeText, { color: top.badgeColor || '#999' }]}>{top.badge}</Text>
-                              </View>
-                            )}
-                          </View>
-                          <Text style={styles.csub}>{top.date}</Text>
-                        </TouchableOpacity>
-                      );
-                    })()}
-                  </>
-                ) : (() => {
-                  // 无置顶：合并 jwc + isjtu，按时间倒序取 2 条
-                  const merged: { id: string; title: string; date: string; url?: string; badge?: string; badgeColor?: string; detail?: string }[] = [];
-                  for (const n of jwcNotices) {
-                    merged.push({ id: 'jwc_' + n.id, title: n.title, date: n.date, url: n.url, badge: n.isXuanKe ? '选课' : undefined, badgeColor: '#2E7D32' });
-                  }
-                  for (const n of isjtuNotices) {
-                    merged.push({ id: 'isjtu_' + n.id, title: n.title, date: n.time?.substring(0, 10) || '', badge: n.isTiaoKe ? '调课' : undefined, badgeColor: '#E65100' });
-                  }
-                  const top2 = merged.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 2);
-                  if (top2.length === 0) return <View style={styles.sectionCard}><Text style={styles.cmain}>暂无通知</Text></View>;
-                  return top2.map((item, i) => (
-                    <TouchableOpacity
-                      key={item.id}
-                      style={[item.badge ? styles.sectionCard : styles.notifMinorCard, i < top2.length - 1 && { marginBottom: 6 }]}
-                      activeOpacity={0.7}
-                      onPress={() => {
-                        if (item.url && !item.badge) { navigation.navigate('WebView', { url: item.url, title: '教务通知' }); }
-                        else { navigation.navigate('Notif'); }
-                      }}
-                    >
-                      <View style={styles.notifItemRow}>
-                        <Text style={styles.citem} numberOfLines={1}>{item.title}</Text>
-                        {item.badge && (
-                          <View style={[styles.notifBadge, { backgroundColor: (item.badgeColor || '#999') + '18' }]}>
-                            <Text style={[styles.notifBadgeText, { color: item.badgeColor || '#999' }]}>{item.badge}</Text>
-                          </View>
-                        )}
-                      </View>
-                      <Text style={styles.csub}>{item.date}</Text>
-                    </TouchableOpacity>
-                  ));
-                })()}
-              </TouchableOpacity>
-            </View>
-          </View>
+          {/* 刷新确认弹窗 */}
 
           {/* 刷新确认弹窗 */}
           <Modal visible={showRefreshModal} transparent animationType="fade" onRequestClose={() => setShowRefreshModal(false)}>

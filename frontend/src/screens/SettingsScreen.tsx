@@ -39,7 +39,7 @@ const SETTINGS_SECTIONS = [
       { key: 'nickname', icon: 'person', label: '昵称', desc: '设置你的显示名称' },
       { key: 'canvasToken', icon: 'vpn-key', label: 'Canvas Token', desc: '设置你的Canvas Token' },
       { key: 'jaccount', icon: 'lock', label: 'jAccount 凭据', desc: '设置你的jAccount用户名和密码' },
-      { key: 'communityPwd', icon: 'forum', label: '选课社区密码（相关功能敬请期待）', desc: '设置选课社区的独立密码' },
+      { key: 'communityPwd', icon: 'forum', label: '选课社区密码', desc: '设置选课社区的独立密码以便查看评价' },
       { key: 'jaccountLogin', icon: 'language', label: '登录 jAccount', desc: '单击以登录jAccount' },
     ],
   },
@@ -50,6 +50,7 @@ const SETTINGS_SECTIONS = [
       { key: 'examInterval', icon: 'edit-note', label: '考试更新间隔', desc: '考试信息缓存有效期' },
       { key: 'crazyThursday', icon: 'celebration', label: 'Crazy Thursday', desc: '每周四显示彩蛋图片' },
       { key: 'backgroundInterval', icon: 'sync', label: '后台刷新间隔', desc: '关闭（仅前台刷新）' },
+      { key: 'sectionOrder', icon: 'view-module', label: '主页板块排序', desc: '自定义各板块的排列优先级' },
     ],
   },
   {
@@ -111,7 +112,7 @@ export const SettingsScreen = ({ navigation }: any) => {
     setClearState('clearing');
     try {
       const keys = await AsyncStorage.getAllKeys();
-      await AsyncStorage.removeMany(keys);
+      await AsyncStorage.multiRemove(keys);
       setClearState('success');
     } catch (e: any) {
       setClearErrorMsg(e?.message || '未知错误');
@@ -195,6 +196,10 @@ export const SettingsScreen = ({ navigation }: any) => {
       const current = await getBackgroundInterval();
       setTempBgInterval(current);
       setShowBgIntervalModal(true);
+      return;
+    }
+    if (key === 'sectionOrder') {
+      navigation.navigate('SectionOrder');
       return;
     }
 

@@ -293,3 +293,67 @@ export const setIsjtuNoticeCache = async (ids: string[]) => {
     AsyncStorage.setItem(ISJTU_NOTICES_USER_KEY, username || ''),
   ]);
 };
+
+// ── 选课社区收藏 ──
+const COMMUNITY_FAVORITES_KEY = 'COMMUNITY_FAVORITES';
+
+export interface CommunityFavorite {
+  courseId: number;
+  courseCode: string;
+  courseName: string;
+  teacherName: string;
+  addedAt: number;
+  avgRating?: number;
+  reviewCount?: number;
+  credibilityLevel?: string;
+}
+
+export const getCommunityFavorites = async (): Promise<CommunityFavorite[]> => {
+  try {
+    const raw = await AsyncStorage.getItem(COMMUNITY_FAVORITES_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+};
+
+export const addCommunityFavorite = async (fav: CommunityFavorite) => {
+  const list = await getCommunityFavorites();
+  if (!list.find(f => f.courseId === fav.courseId)) {
+    list.push(fav);
+    await AsyncStorage.setItem(COMMUNITY_FAVORITES_KEY, JSON.stringify(list));
+  }
+};
+
+export const removeCommunityFavorite = async (courseId: number) => {
+  const list = await getCommunityFavorites();
+  await AsyncStorage.setItem(COMMUNITY_FAVORITES_KEY, JSON.stringify(list.filter(f => f.courseId !== courseId)));
+};
+
+export const isCommunityFavorite = async (courseId: number): Promise<boolean> => {
+  const list = await getCommunityFavorites();
+  return list.some(f => f.courseId === courseId);
+};
+
+// ── 主页板块自定义优先级 ──
+const SECTION_PRIORITIES_KEY = 'SECTION_PRIORITIES';
+
+/** 默认优先级 */
+export const DEFAULT_SECTION_PRIORITIES: Record<string, number> = {
+  schedule: 1,
+  assignments: 2,
+  announce: 3,
+  exams: 4,
+  notif: 5,
+  mail: 6,
+  community: 7,
+};
+
+export const getSectionPriorities = async (): Promise<Record<string, number>> => {
+  try {
+    const raw = await AsyncStorage.getItem(SECTION_PRIORITIES_KEY);
+    return raw ? { ...DEFAULT_SECTION_PRIORITIES, ...JSON.parse(raw) } : { ...DEFAULT_SECTION_PRIORITIES };
+  } catch { return { ...DEFAULT_SECTION_PRIORITIES }; }
+};
+
+export const setSectionPriorities = async (priorities: Record<string, number>) => {
+  await AsyncStorage.setItem(SECTION_PRIORITIES_KEY, JSON.stringify(priorities));
+};

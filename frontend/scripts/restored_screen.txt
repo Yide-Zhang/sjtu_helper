@@ -1,0 +1,1027 @@
+﻿import React, { useState, useCallback, useRef, useEffect } from 'react';
+import {
+  View, Text, StyleSheet, TextInput, TouchableOpacity,
+  FlatList, ActivityIndicator, ScrollView, Modal, Alert,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
+import {
+  searchCourses, getCourseDetail, getAllCourseReviews,
+  CourseListItem, Review,
+} from '../api/courseCommunity';
+import {
+  calculateCredibility, ratingToStars, groupByCourseName,
+  GroupedCourseResult, AggregatedTeacherInfo,
+} from '../utils/credibility';
+
+// ========== 棰滆壊甯搁噺 ==========
+const COLORS = {
+  primary: '#0055A8',
+  primaryLight: '#E8F0FE',
+  bg: '#F5F5F5',
+  card: '#FFFFFF',
+  text: '#333333',
+  textSecondary: '#888888',
+  border: '#EEEEEE',
+  credibilityHigh: '#4CAF50',
+  credibilityMid: '#FF9800',
+  credibilityLow: '#9E9E9E',
+  star: '#FFB800',
+};
+
+// ========== 鐘舵€佺被鍨?==========
+
+type SearchStatus = 'idle' | 'loading' | 'success' | 'error' | 'authing';
+
+interface ExpandedState {
+  [courseName: string]: {
+    [teacherName: string]: boolean;
+  };
+}
+
+// ========== 灏忕粍浠?==========
+
+/** 鍙俊搴﹀窘绔?*/
+const CredibilityBadge = ({ level, score }: { level: string; score: number }) => {
+  const color = level === '楂? ? COLORS.credibilityHigh
+    : level === '涓? ? COLORS.credibilityMid
+    : COLORS.credibilityLow;
+  return (
+    <View style={[styles.badge, { backgroundColor: color + '20', borderColor: color }]}>
+      <Text style={[styles.badgeText, { color }]}>鍙俊搴? {level}</Text>
+      <Text style={[styles.badgeScore, { color }]}>({(score * 100).toFixed(0)})</Text>
+    </View>
+  );
+};
+
+/** 璇勫垎鏄熸爣琛?*/
+const RatingRow = ({ avg, count }: { avg: number; count: number }) => (
+  <View style={styles.ratingRow}>
+    <Text style={styles.stars}>{ratingToStars(avg)}</Text>
+    <Text style={styles.ratingNum}>{avg.toFixed(2)}</Text>
+    <Text style={styles.ratingCount}>{count}鏉＄偣璇?/Text>
+  </View>
+);
+
+/** 鍗曟潯鐐硅瘎鍗＄墖 */
+const ReviewCard = ({ review, isLast }: { review: Review; isLast: boolean }) => {
+  const [showFull, setShowFull] = useState(false);
+  const commentLines = review.comment.split('\\n').filter(l => l.trim());
+  const preview = commentLines.length > 4 ? commentLines.slice(0, 4).join('\n') + '...' : review.comment;
+
+  return (
+    <View style={[styles.reviewCard, !isLast && { borderBottomWidth: 1, borderBottomColor: COLORS.border }]}>
+      <View style={styles.reviewHeader}>
+        <View style={styles.reviewMeta}>
+          <Text style={styles.reviewSemester}>{review.semester}</Text>
+          <View style={styles.reviewRating}>
+            {[1, 2, 3, 4, 5].map(i => (
+              <Text key={i} style={{ color: i <= review.rating ? COLORS.star : '#DDD', fontSize: 12 }}>
+                鈽?
+              </Text>
+            ))}
+          </View>
+        </View>
+        <Text style={styles.reviewDate}>{review.created_at}</Text>
+      </View>
+
+      <TouchableOpacity onPress={() => setShowFull(!showFull)} activeOpacity={0.7}>
+        <Text style={styles.reviewComment} numberOfLines={showFull ? undefined : 3}>
+          {review.comment.replace(/\\n/g, '\n')}
+        </Text>
+      </TouchableOpacity>
+
+      {review.reactions && (review.reactions.approves > 0 || review.reactions.disapproves > 0) && (
+        <View style={styles.reactionRow}>
+          {review.reactions.approves > 0 && (
+            <Text style={styles.reactionText}>馃憤 {review.reactions.approves}</Text>
+          )}
+          {review.reactions.disapproves > 0 && (
+            <Text style={styles.reactionText}>馃憥 {review.reactions.disapproves}</Text>
+          )}
+          {review.score && <Text style={styles.reviewScore}>寰楀垎: {review.score}</Text>}
+        </View>
+      )}
+    </View>
+  );
+};
+
+// ========== 涓诲睆骞?==========
+
+export const CommunityReviewScreen = ({ navigation }: any) => {
+  const insets = useSafeAreaInsets();
+  const [searchText, setSearchText] = useState('');
+  const [status, setStatus] = useState<SearchStatus>('idle');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [groups, setGroups] = useState<GroupedCourseResult[]>([]);
+  const [expanded, setExpanded] = useState<ExpandedState>({});
+  const [loadingDetail, setLoadingDetail] = useState<{ courseName: string; teacherName: string } | null>(null);
+
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ===== 鎼滅储閫昏緫 =====
+  const handleSearch = useCallback(async (query: string) => {
+    const trimmed = query.trim();
+    if (!trimmed) {
+      setStatus('idle');
+      setGroups([]);
+      return;
+    }
+
+    setStatus('loading');
+    setGroups([]);
+
+    try {
+      const result = await searchCourses(trimmed);
+      if (!result) {
+        setStatus('authing');
+        return;
+      }
+
+      if (result.count === 0) {
+        setStatus('error');
+        setErrorMsg('娌℃湁鎵惧埌鐩稿叧璇剧▼');
+        return;
+      }
+
+      // 骞跺彂鑾峰彇姣忎釜璇剧▼鐨勮鎯呭拰鐐硅瘎
+      const detailMap = new Map<number, { reviews: Review[]; info: any }>();
+      const teacherMap = new Map<string, { courseId: number; courseName: string; courseCode: string; rating: number; reviewCount: number }[]>();
+
+      const detailPromises = result.results.map(async (item: CourseListItem) => {
+        try {
+          const [info, reviews] = await Promise.all([
+            getCourseDetail(item.id),
+            getAllCourseReviews(item.id),
+          ]);
+          return { item, info, reviews };
+        } catch {
+          return { item, info: null, reviews: [] as Review[] };
+        }
+      });
+
+      const details = await Promise.all(detailPromises);
+
+      for (const { item, info, reviews } of details) {
+        if (item) {
+          detailMap.set(item.id, { reviews, info: info || undefined });
+          // 鎸夋暀甯堝悕鑱氬悎
+          if (!teacherMap.has(item.teacher)) {
+            teacherMap.set(item.teacher, []);
+          }
+          teacherMap.get(item.teacher)!.push({
+            courseId: item.id,
+            courseName: item.name,
+            courseCode: item.code,
+            rating: item.rating.avg,
+            reviewCount: item.rating.count,
+          });
+        }
+      }
+
+      const grouped = groupByCourseName(result.results, detailMap, teacherMap);
+      setGroups(grouped);
+      setStatus('success');
+    } catch (err: any) {
+      setStatus('error');
+      setErrorMsg(err?.message || '鎼滅储澶辫触锛岃閲嶈瘯');
+    }
+  }, []);
+
+  // 闃叉姈鎼滅储
+  const onSearchTextChange = useCallback((text: string) => {
+    setSearchText(text);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => handleSearch(text), 500);
+  }, [handleSearch]);
+
+  // 娓呯悊
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, []);
+
+  // ===== 灞曞紑/鏀惰捣 =====
+  const toggleExpand = (courseName: string, teacherName: string) => {
+    setExpanded(prev => {
+      const course = prev[courseName] || {};
+      return {
+        ...prev,
+        [courseName]: {
+          ...course,
+          [teacherName]: !course[teacherName],
+        },
+      };
+    });
+  };
+
+  // ===== 娓叉煋 =====
+  const renderTeacherCard = (teacher: AggregatedTeacherInfo, courseName: string) => {
+    const isExpanded = expanded[courseName]?.[teacher.teacherName] ?? false;
+
+    return (
+      <View key={teacher.teacherName} style={styles.teacherCard}>
+        <TouchableOpacity
+          onPress={() => toggleExpand(courseName, teacher.teacherName)}
+          activeOpacity={0.7}
+          style={styles.teacherHeader}
+        >
+          <View style={styles.teacherInfo}>
+            <View style={styles.teacherNameRow}>
+              <Text style={styles.teacherName}>{teacher.teacherName}</Text>
+              <CredibilityBadge
+                level={teacher.courseRating.credibility.level}
+                score={teacher.courseRating.credibility.overall}
+              />
+            </View>
+            <Text style={styles.teacherDept}>{teacher.department}</Text>
+            <RatingRow avg={teacher.courseRating.avg} count={teacher.courseRating.count} />
+            {teacher.overallRating && teacher.otherCourses.length > 0 && (
+              <Text style={styles.otherCoursesText}>
+                璇ユ暀甯堣繕鏈?{teacher.otherCourses.length} 闂ㄨ鍙弬鑰?
+              </Text>
+            )}
+          </View>
+          <MaterialIcons
+            name={isExpanded ? 'expand-less' : 'expand-more'}
+            size={22}
+            color={COLORS.textSecondary}
+          />
+        </TouchableOpacity>
+
+        {/* 灞曞紑鐨勭偣璇勫垪琛?*/}
+        {isExpanded && (
+          <View style={styles.reviewsContainer}>
+            {teacher.reviews.length === 0 ? (
+              <Text style={styles.noReviewText}>鏆傛棤鐐硅瘎鍐呭</Text>
+            ) : (
+              <>
+                <View style={styles.reviewsHeader}>
+                  <Text style={styles.reviewsTitle}>鐐硅瘎鍒楄〃锛坽teacher.reviews.length}鏉★級</Text>
+                </View>
+                {teacher.reviews.map((r, idx) => (
+                  <ReviewCard
+                    key={r.id}
+                    review={r}
+                    isLast={idx === teacher.reviews.length - 1}
+                  />
+                ))}
+              </>
+            )}
+
+            {/* 鍏朵粬璇剧▼鍙傝€?*/}
+            {teacher.otherCourses.length > 0 && (
+              <View style={styles.otherCoursesSection}>
+                <Text style={styles.otherCoursesTitle}>璇ユ暀甯堝叾浠栬绋嬭瘎鍒嗗弬鑰?/Text>
+                {teacher.otherCourses.map(oc => (
+                  <View key={oc.courseId} style={styles.otherCourseItem}>
+                    <Text style={styles.otherCourseName} numberOfLines={1}>
+                      {oc.courseCode} {oc.courseName}
+                    </Text>
+                    <View style={styles.otherCourseRating}>
+                      <Text style={styles.stars}>{ratingToStars(oc.rating)}</Text>
+                      <Text style={styles.ratingNum}>{oc.rating.toFixed(2)}</Text>
+                      <Text style={styles.ratingCount}>({oc.reviewCount})</Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {/* 鍙俊搴︽槑缁?*/}
+            <View style={styles.credibilityDetail}>
+              <Text style={styles.credibilityDetailTitle}>鍙俊搴﹁绠楁槑缁?/Text>
+              <View style={styles.credibilityBar}>
+                <Text style={styles.credibilityLabel}>鏃舵晥鎬?/Text>
+                <View style={styles.credibilityBarTrack}>
+                  <View style={[styles.credibilityBarFill, {
+                    width: `${(teacher.courseRating.credibility.factors.recency * 100).toFixed(0)}%`,
+                    backgroundColor: COLORS.credibilityHigh,
+                  }]} />
+                </View>
+                <Text style={styles.credibilityValue}>
+                  {(teacher.courseRating.credibility.factors.recency * 100).toFixed(0)}
+                </Text>
+              </View>
+              <View style={styles.credibilityBar}>
+                <Text style={styles.credibilityLabel}>鏁伴噺</Text>
+                <View style={styles.credibilityBarTrack}>
+                  <View style={[styles.credibilityBarFill, {
+                    width: `${(teacher.courseRating.credibility.factors.volume * 100).toFixed(0)}%`,
+                    backgroundColor: COLORS.primary,
+                  }]} />
+                </View>
+                <Text style={styles.credibilityValue}>
+                  {(teacher.courseRating.credibility.factors.volume * 100).toFixed(0)}
+                </Text>
+              </View>
+              <View style={styles.credibilityBar}>
+                <Text style={styles.credibilityLabel}>鍏辫瘑搴?/Text>
+                <View style={styles.credibilityBarTrack}>
+                  <View style={[styles.credibilityBarFill, {
+                    width: `${(teacher.courseRating.credibility.factors.consensus * 100).toFixed(0)}%`,
+                    backgroundColor: COLORS.credibilityMid,
+                  }]} />
+                </View>
+                <Text style={styles.credibilityValue}>
+                  {(teacher.courseRating.credibility.factors.consensus * 100).toFixed(0)}
+                </Text>
+              </View>
+            </View>
+          </View>
+        )}
+      </View>
+    );
+  };
+
+  const renderGroup = ({ item }: { item: GroupedCourseResult }) => (
+    <View style={styles.groupContainer}>
+      <Text style={styles.courseNameTitle}>{item.courseName}</Text>
+      {item.teachers.map(teacher => renderTeacherCard(teacher, item.courseName))}
+    </View>
+  );
+
+  return (
+    <View style={[styles.container, { paddingTop: insets.top }]}>
+      {/* 澶撮儴 */}
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} activeOpacity={0.7}>
+          <MaterialIcons name="arrow-back" size={24} color="#333" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>閫夎绀惧尯</Text>
+        <View style={styles.backBtn} />
+      </View>
+
+      {/* 鎼滅储鏍?*/}
+      <View style={styles.searchBar}>
+        <MaterialIcons name="search" size={20} color="#999" style={styles.searchIcon} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder="鎼滅储璇剧▼鍚嶇О/璇惧彿/鏁欏笀濮撳悕"
+          placeholderTextColor="#BBB"
+          value={searchText}
+          onChangeText={onSearchTextChange}
+          returnKeyType="search"
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        {searchText.length > 0 && (
+          <TouchableOpacity onPress={() => { setSearchText(''); setStatus('idle'); setGroups([]); }}>
+            <MaterialIcons name="close" size={18} color="#999" />
+          </TouchableOpacity>
+        )}
+      </View>
+
+      {/* 鍐呭鍖?*/}
+      {status === 'idle' && (
+        <View style={styles.emptyState}>
+          <MaterialIcons name="forum" size={48} color="#DDD" />
+          <Text style={styles.emptyText}>鎼滅储璇剧▼鍚嶇О鏌ョ湅涓嶅悓鑰佸笀鐨勮瘎鍒嗗姣?/Text>
+          <Text style={styles.emptyHint}>鏀寔妯＄硦鎼滅储锛屼緥濡?鏁板鍒嗘瀽"銆?閫氶€?</Text>
+        </View>
+      )}
+
+      {status === 'authing' && (
+        <View style={styles.loadingState}>
+          <ActivityIndicator size="large" color={COLORS.primary} />
+          <Text style={styles.loadingText}>姝ｅ湪鐧诲綍閫夎绀惧尯...</Text>
+        </View>
+      )}
+
+      {status === 'loading' && (
+        <View style={styles.loadingState}>
+          <ActivityIndicator size="large" color={COLORS.primary} />
+          <Text style={styles.loadingText}>姝ｅ湪鎼滅储骞跺垎鏋愮偣璇勬暟鎹?..</Text>
+        </View>
+      )}
+
+      {status === 'error' && (
+        <View style={styles.emptyState}>
+          <MaterialIcons name="search-off" size={48} color="#DDD" />
+          <Text style={styles.emptyText}>{errorMsg}</Text>
+        </View>
+      )}
+
+      {status === 'success' && (
+        <FlatList
+          data={groups}
+          renderItem={renderGroup}
+          keyExtractor={item => item.courseName}
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+          ListHeaderComponent={
+            <Text style={styles.resultCount}>
+              鎵惧埌 {groups.reduce((s, g) => s + g.teachers.length, 0)} 浣嶆暀甯?
+            </Text>
+          }
+        />
+      )}
+    </View>
+  );
+};
+
+// ========== 鏍峰紡 ==========
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: COLORS.bg },
+
+  // 澶撮儴
+  header: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 12, paddingVertical: 10,
+    backgroundColor: COLORS.card, borderBottomWidth: 1, borderBottomColor: COLORS.border,
+  },
+  backBtn: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' },
+  headerTitle: { fontSize: 16, fontWeight: '700', color: COLORS.text },
+
+  // 鎼滅储鏍?
+  searchBar: {
+    flexDirection: 'row', alignItems: 'center',
+    margin: 12, paddingHorizontal: 12,
+    backgroundColor: COLORS.card, borderRadius: 10,
+    borderWidth: 1, borderColor: COLORS.border,
+    height: 42,
+  },
+  searchIcon: { marginRight: 8 },
+  searchInput: { flex: 1, fontSize: 15, color: COLORS.text, padding: 0 },
+
+  // 绌虹姸鎬?/ 鍔犺浇
+  emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 40 },
+  emptyText: { fontSize: 15, color: COLORS.textSecondary, marginTop: 12, textAlign: 'center' },
+  emptyHint: { fontSize: 13, color: '#CCC', marginTop: 6, textAlign: 'center' },
+  loadingState: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  loadingText: { fontSize: 14, color: COLORS.textSecondary, marginTop: 12 },
+
+  // 鍒楄〃
+  listContent: { paddingBottom: 40 },
+  resultCount: { fontSize: 13, color: COLORS.textSecondary, paddingHorizontal: 16, paddingVertical: 8 },
+
+  // 璇剧▼缁?
+  groupContainer: { marginBottom: 16 },
+
+  // 璇剧▼鍚嶆爣棰?
+  courseNameTitle: {
+    fontSize: 18, fontWeight: '700', color: COLORS.text,
+    paddingHorizontal: 16, paddingVertical: 12,
+    backgroundColor: COLORS.bg,
+  },
+
+  // 鏁欏笀鍗＄墖
+  teacherCard: {
+    marginHorizontal: 12, marginBottom: 8,
+    backgroundColor: COLORS.card, borderRadius: 12,
+    overflow: 'hidden',
+    shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 4, shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  teacherHeader: {
+    flexDirection: 'row', alignItems: 'center', padding: 14,
+  },
+  teacherInfo: { flex: 1 },
+  teacherNameRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
+  teacherName: { fontSize: 16, fontWeight: '600', color: COLORS.text },
+  teacherDept: { fontSize: 12, color: COLORS.textSecondary, marginBottom: 4 },
+
+  // 璇勫垎
+  ratingRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  stars: { fontSize: 14, color: COLORS.star, letterSpacing: 1 },
+  ratingNum: { fontSize: 14, fontWeight: '600', color: COLORS.text },
+  ratingCount: { fontSize: 12, color: COLORS.textSecondary },
+
+  // 鍙俊搴﹀窘绔?
+  badge: {
+    flexDirection: 'row', alignItems: 'center', gap: 2,
+    paddingHorizontal: 8, paddingVertical: 2,
+    borderRadius: 10, borderWidth: 1,
+  },
+  badgeText: { fontSize: 11, fontWeight: '600' },
+  badgeScore: { fontSize: 10 },
+
+  // 鍏朵粬璇剧▼
+  otherCoursesText: { fontSize: 12, color: COLORS.primary, marginTop: 4 },
+  otherCoursesSection: {
+    padding: 14, borderTopWidth: 1, borderTopColor: COLORS.border,
+    backgroundColor: '#FAFAFA',
+  },
+  otherCoursesTitle: { fontSize: 13, fontWeight: '600', color: COLORS.text, marginBottom: 8 },
+  otherCourseItem: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingVertical: 4,
+  },
+  otherCourseName: { fontSize: 13, color: COLORS.text, flex: 1 },
+  otherCourseRating: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+
+  // 鐐硅瘎鍒楄〃
+  reviewsContainer: {},
+  reviewsHeader: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: 14, paddingVertical: 8,
+    backgroundColor: '#FAFAFA', borderTopWidth: 1, borderTopColor: COLORS.border,
+  },
+  reviewsTitle: { fontSize: 13, fontWeight: '600', color: COLORS.text },
+  noReviewText: { fontSize: 13, color: COLORS.textSecondary, padding: 20, textAlign: 'center' },
+
+  // 鍗曟潯鐐硅瘎
+  reviewCard: { padding: 12 },
+  reviewHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  reviewMeta: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  reviewSemester: { fontSize: 11, color: COLORS.primary, fontWeight: '500', backgroundColor: COLORS.primaryLight, paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4 },
+  reviewRating: { flexDirection: 'row', gap: 1 },
+  reviewDate: { fontSize: 11, color: COLORS.textSecondary },
+  reviewComment: { fontSize: 13, color: '#555', lineHeight: 19 },
+  reactionRow: { flexDirection: 'row', gap: 12, marginTop: 6 },
+  reactionText: { fontSize: 12, color: COLORS.textSecondary },
+  reviewScore: { fontSize: 12, color: COLORS.primary },
+
+  // 鍙俊搴︽槑缁?
+  credibilityDetail: {
+    padding: 14, backgroundColor: '#F8F9FA',
+    borderTopWidth: 1, borderTopColor: COLORS.border,
+  },
+  credibilityDetailTitle: { fontSize: 12, fontWeight: '600', color: COLORS.textSecondary, marginBottom: 8 },
+  credibilityBar: { flexDirection: 'row', alignItems: 'center', marginBottom: 4, gap: 6 },
+  credibilityLabel: { fontSize: 11, color: COLORS.textSecondary, width: 36 },
+  credibilityBarTrack: {
+    flex: 1, height: 6, backgroundColor: '#E8E8E8', borderRadius: 3,
+    overflow: 'hidden',
+  },
+  credibilityBarFill: { height: '100%', borderRadius: 3 },
+  credibilityValue: { fontSize: 11, color: COLORS.textSecondary, width: 28, textAlign: 'right' },
+});
+
+===FILE_END===
+import React, { useState, useCallback, useRef, useEffect } from 'react';
+import {
+  View, Text, StyleSheet, TextInput, TouchableOpacity,
+  FlatList, ActivityIndicator, Dimensions, Animated,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
+import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
+import Markdown from 'react-native-markdown-display';
+import {
+  searchCourses, getCourseDetail, getAllCourseReviews,
+  CourseListItem, Review,
+} from '../api/courseCommunity';
+import {
+  calculateCredibility, ratingToStars, groupByCourseName,
+  GroupedCourseResult, AggregatedTeacherInfo,
+} from '../utils/credibility';
+import {
+  getCommunityFavorites, addCommunityFavorite, removeCommunityFavorite,
+  isCommunityFavorite, CommunityFavorite,
+} from '../utils/storage';
+
+const { height: SCREEN_HEIGHT } = Dimensions.get('window');
+const SCROLL_THRESHOLD = SCREEN_HEIGHT * 2;
+
+type SearchStatus = 'idle' | 'loading' | 'success' | 'error';
+
+interface GroupedRow {
+  code: string;
+  name: string;
+  teachers: CourseListItem[];
+  expanded: boolean;
+  loadingReviews: boolean;
+  teacherReviews: Map<number, Review[]>;
+  teacherCredibility: Map<number, { level: string; score: number }>;
+  isTeacherOverview?: boolean;
+}
+
+const C = {
+  primary: '#0055A8', primaryLight: '#E8F0FE',
+  bg: '#F5F5F5', card: '#FFFFFF',
+  text: '#333', textSec: '#888',
+  border: '#EEE', star: '#FFB800',
+  credH: '#4CAF50', credM: '#FF9800', credL: '#9E9E9E',
+};
+
+const CATEGORY_COLORS: Record<string, string> = {
+  '宸ョ▼绉戝涓庢妧鏈?: '#1565C0', '浣撹偛': '#F4511E', '绀句細绉戝': '#2E7D32',
+  '鐮旂┒鐢?: '#6A1B9A', '鑷劧绉戝': '#00838F', '閫氶€?: '#0D47A1',
+  '鏂扮敓鐮旇': '#E65100', '鑹烘湳淇吇': '#C62828', '浜烘枃瀛︾': '#4E342E',
+};
+
+const getCategoryColor = (cat: string): string => {
+  for (const [key, color] of Object.entries(CATEGORY_COLORS)) {
+    if (cat.includes(key)) return color;
+  }
+  return '#757575';
+};
+
+export const CommunityReviewScreen = ({ navigation }: any) => {
+  const insets = useSafeAreaInsets();
+  const [searchText, setSearchText] = useState('');
+  const [status, setStatus] = useState<SearchStatus>('idle');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [groups, setGroups] = useState<GroupedRow[]>([]);
+  const [showScrollTop, setShowScrollTop] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flatListRef = useRef<FlatList>(null);
+  const [favoriteIds, setFavoriteIds] = useState<Set<number>>(new Set());
+  const scrollY = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const listener = scrollY.addListener(({ value }) => setShowScrollTop(value > SCROLL_THRESHOLD));
+    return () => { scrollY.removeListener(listener); };
+  }, []);
+
+  const handleSearch = useCallback(async (query: string) => {
+    const trimmed = query.trim();
+    if (!trimmed) { setStatus('idle'); setGroups([]); return; }
+    setStatus('loading'); setGroups([]);
+    try {
+      const result = await searchCourses(trimmed);
+      if (!result) {
+        setStatus('error'); setErrorMsg('鐧诲綍閫夎绀惧尯澶辫触锛岃鍦ㄨ缃腑妫€鏌?jAccount 鍑嵁鎴栭€夎绀惧尯瀵嗙爜'); return;
+      }
+      if (result.count === 0) {
+        setStatus('error'); setErrorMsg('娌℃湁鎵惧埌鐩稿叧璇剧▼'); return;
+      }
+      const codeMap = new Map<string, CourseListItem[]>();
+      const teacherCoursesMap = new Map<string, CourseListItem[]>();
+      for (const item of result.results) {
+        if (!codeMap.has(item.code)) codeMap.set(item.code, []);
+        codeMap.get(item.code)!.push(item);
+        if (!teacherCoursesMap.has(item.teacher)) teacherCoursesMap.set(item.teacher, []);
+        teacherCoursesMap.get(item.teacher)!.push(item);
+      }
+      const allTeachers = [...new Set(result.results.map(r => r.teacher))];
+      const isSearchingTeacher = allTeachers.length === 1;
+      const groupRows: GroupedRow[] = [];
+      if (isSearchingTeacher) {
+        const teacherName = allTeachers[0];
+        const tCourses = teacherCoursesMap.get(teacherName) || [];
+        const overviewRow: GroupedRow = {
+          code: '__TEACHER__' + teacherName, name: teacherName + ' 缁煎悎',
+          teachers: tCourses, expanded: true, loadingReviews: true,
+          teacherReviews: new Map(), teacherCredibility: new Map(), isTeacherOverview: true,
+        };
+        groupRows.push(overviewRow);
+        const seenCodes = new Set<string>();
+        for (const item of result.results) {
+          if (!seenCodes.has(item.code)) {
+            seenCodes.add(item.code);
+            const sameCode = result.results.filter(r => r.code === item.code);
+            groupRows.push({
+              code: item.code, name: item.name, teachers: sameCode,
+              expanded: true, loadingReviews: true,
+              teacherReviews: new Map(), teacherCredibility: new Map(),
+            });
+          }
+        }
+      } else {
+        for (const [code, teachers] of codeMap) {
+          groupRows.push({
+            code, name: teachers[0].name, teachers,
+            expanded: false, loadingReviews: false,
+            teacherReviews: new Map(), teacherCredibility: new Map(),
+          });
+        }
+        groupRows.sort((a, b) => a.code.localeCompare(b.code));
+      }
+      setGroups(groupRows);
+      setStatus('success');
+      // 鍔犺浇璇勮
+      setTimeout(() => loadReviewsForAll(groupRows), 100);
+    } catch {
+      setStatus('error'); setErrorMsg('鎼滅储鍑洪敊锛岃绋嶅悗閲嶈瘯');
+    }
+  }, []);
+
+  const loadReviewsForAll = async (groupRows: GroupedRow[]) => {
+    for (let idx = 0; idx < groupRows.length; idx++) {
+      const row = groupRows[idx];
+      if (row.isTeacherOverview) {
+        for (const t of row.teachers) {
+          try {
+            const reviews = await getAllCourseReviews(t.id);
+            row.teacherReviews.set(t.id, reviews);
+            if (reviews.length > 0) {
+              const cred = calculateCredibility(reviews);
+              row.teacherCredibility.set(t.id, cred);
+            }
+          } catch {}
+        }
+      } else {
+        for (const t of row.teachers) {
+          if (!row.teacherReviews.has(t.id)) {
+            try {
+              const reviews = await getAllCourseReviews(t.id);
+              row.teacherReviews.set(t.id, reviews);
+              if (reviews.length > 0) {
+                const cred = calculateCredibility(reviews);
+                row.teacherCredibility.set(t.id, cred);
+              }
+            } catch {}
+          }
+        }
+      }
+      row.loadingReviews = false;
+    }
+    setGroups([...groupRows]);
+  };
+
+  const toggleGroup = (index: number) => {
+    const newGroups = [...groups];
+    const row = newGroups[index];
+    if (!row.expanded) {
+      row.expanded = true;
+      if (row.teacherReviews.size === 0) {
+        row.loadingReviews = true;
+        setGroups(newGroups);
+        loadReviewsForAll(newGroups);
+      } else {
+        setGroups(newGroups);
+      }
+    } else {
+      row.expanded = false;
+      setGroups(newGroups);
+    }
+  };
+
+  const toggleTeacherReviews = (teacherKey: string) => {
+    setExpandedTeachers(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(teacherKey)) newSet.delete(teacherKey);
+      else newSet.add(teacherKey);
+      return newSet;
+    });
+  };
+
+  const [expandedTeachers, setExpandedTeachers] = useState<Set<string>>(new Set());
+
+  const calcOverviewCredibility = (item: GroupedRow): AggregatedTeacherInfo | null => {
+    if (!item.isTeacherOverview) return null;
+    const allCreds: { avg: number; count: number }[] = [];
+    for (const [, cred] of item.teacherCredibility) {
+      allCreds.push(cred);
+    }
+    if (allCreds.length === 0) return null;
+    const totalReviews = allCreds.reduce((s, c) => s + c.count, 0);
+    const weighted = allCreds.reduce((s, c) => s + c.avg * c.count, 0) / totalReviews;
+    const level = weighted >= 4 ? '楂? : weighted >= 3 ? '涓? : '浣?;
+    return { avg: weighted, totalReviews, level };
+  };
+
+  const toggleFavorite = async (courseId: number) => {
+    const isFav = favoriteIds.has(courseId);
+    if (isFav) {
+      await removeCommunityFavorite(courseId);
+      favoriteIds.delete(courseId);
+      setFavoriteIds(new Set(favoriteIds));
+    } else {
+      const info = { id: courseId, code: '', name: '', teacher: '' };
+      await addCommunityFavorite(info);
+      favoriteIds.add(courseId);
+      setFavoriteIds(new Set(favoriteIds));
+    }
+  };
+
+  useFocusEffect(useCallback(() => {
+    (async () => {
+      const favs: CommunityFavorite[] = await getCommunityFavorites();
+      setFavoriteIds(new Set(favs.map(f => f.id)));
+    })();
+  }, []));
+
+  const renderGroup = ({ item, index }: { item: GroupedRow; index: number }) => (
+    <View style={styles.group}>
+      <TouchableOpacity style={[styles.groupHeader, item.isTeacherOverview && styles.groupHeaderTeacher]} onPress={() => toggleGroup(index)} activeOpacity={0.7}>
+        <View style={styles.groupHeaderLeft}>
+          <MaterialIcons name={item.expanded ? 'expand-less' : 'expand-more'} size={20} color={item.isTeacherOverview ? C.primary : C.textSec} />
+          {item.isTeacherOverview ? <MaterialIcons name="person" size={18} color={C.primary} /> : null}
+          <Text style={[styles.code, item.isTeacherOverview && { color: C.credH }]}>
+            {item.isTeacherOverview ? '缁煎悎' : item.code}
+          </Text>
+          {!item.isTeacherOverview && item.teachers[0]?.categories?.length > 0 ? (
+            <View style={{ backgroundColor: getCategoryColor(item.teachers[0].categories[0]), borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1, marginLeft: 6 }}>
+              <Text style={{ color: '#FFF', fontSize: 10, fontWeight: '600' }}>{item.teachers[0].categories[0]}</Text>
+            </View>
+          ) : null}
+          <Text style={styles.name} numberOfLines={1}>{item.name}</Text>
+        </View>
+        <Text style={styles.teacherCount}>
+          {item.isTeacherOverview ? `${item.teachers.length}闂ㄨ` : `${item.teachers.length}浣嶈€佸笀`}
+        </Text>
+      </TouchableOpacity>
+
+      {item.expanded && (
+        <View style={styles.teacherList}>
+          {item.loadingReviews && item.teacherReviews.size === 0 && (
+            <ActivityIndicator size="small" color={C.primary} style={{ margin: 12 }} />
+          )}
+
+          {item.isTeacherOverview && (() => {
+            const overview = calcOverviewCredibility(item);
+            return overview ? (
+              <View style={styles.teacherOverviewBanner}>
+                <View style={styles.overviewRow}>
+                  <MaterialIcons name="stars" size={28} color={C.star} />
+                  <View style={{ flex: 1, marginLeft: 10 }}>
+                    <Text style={styles.overviewTitle}>缁煎悎璇勫垎</Text>
+                    <Text style={styles.overviewRating}>{ratingToStars(overview.avg)}  {overview.avg.toFixed(2)}</Text>
+                    <Text style={styles.overviewSub}>鍏?{overview.totalReviews} 鏉＄偣璇?路 {item.teachers.length} 闂ㄨ</Text>
+                  </View>
+                  <View style={[styles.credBadge, {
+                    backgroundColor: (overview.level === '楂? ? C.credH : overview.level === '涓? ? C.credM : C.credL) + '20',
+                    borderColor: overview.level === '楂? ? C.credH : overview.level === '涓? ? C.credM : C.credL,
+                  }]}>
+                    <Text style={[styles.credText, { color: overview.level === '楂? ? C.credH : overview.level === '涓? ? C.credM : C.credL }]}>
+                      鍙俊搴?{overview.level}
+                    </Text>
+                  </View>
+                </View>
+                <Text style={styles.overviewDivider}>鍚勮绋嬭瘎鍒?/Text>
+              </View>
+            ) : null;
+          })()}
+
+          {item.teachers.map(t => {
+            const reviews = item.teacherReviews.get(t.id);
+            const cred = item.teacherCredibility.get(t.id);
+            const teacherKey = `${item.code}_${t.id}`;
+            const showReviews = expandedTeachers.has(teacherKey);
+            return (
+              <TouchableOpacity key={t.id} style={styles.teacherCard} onPress={() => { if (reviews) toggleTeacherReviews(teacherKey); }} activeOpacity={0.7}>
+                <View style={styles.teacherRow}>
+                  {item.isTeacherOverview && <Text style={styles.courseCodeSmall}>{t.code}</Text>}
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.teacherName}>{item.isTeacherOverview ? t.name : t.teacher}</Text>
+                    {reviews && reviews.length > 0 ? (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
+                        <Text style={styles.teacherRating}>{ratingToStars(cred ? cred.avg : 0)}</Text>
+                        <Text style={styles.teacherReviewsCount}>{reviews.length} 鏉?/Text>
+                      </View>
+                    ) : item.loadingReviews ? (
+                      <Text style={styles.csub}>鍔犺浇涓?..</Text>
+                    ) : (
+                      <Text style={styles.csub}>鏆傛棤鐐硅瘎</Text>
+                    )}
+                  </View>
+                  {reviews && reviews.length > 0 && (
+                    <MaterialIcons name={showReviews ? 'expand-less' : 'expand-more'} size={20} color={C.textSec} />
+                  )}
+                  <TouchableOpacity onPress={() => toggleFavorite(t.id)} style={{ paddingLeft: 8 }}>
+                    <MaterialIcons name={favoriteIds.has(t.id) ? 'favorite' : 'favorite-border'} size={20} color={favoriteIds.has(t.id) ? '#E53935' : '#CCC'} />
+                  </TouchableOpacity>
+                </View>
+
+                {showReviews && reviews && (
+                  <View style={styles.reviewsContainer}>
+                    {reviews.slice(0, 5).map(r => (
+                      <View key={r.id} style={styles.reviewCard}>
+                        <View style={styles.reviewHeader}>
+                          <Text style={styles.reviewSemester}>{r.semester.replace(/-/g, ' ')}</Text>
+                          <Text style={styles.reviewRating}>{ratingToStars(r.rating)}</Text>
+                        </View>
+                        <Markdown style={mdStyles}>{r.comment}</Markdown>
+                      </View>
+                    ))}
+                    {reviews.length > 5 && <Text style={styles.moreReviews}>杩樻湁 {reviews.length - 5} 鏉＄偣璇?/Text>}
+                  </View>
+                )}
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      )}
+    </View>
+  );
+
+  return (
+    <View style={[styles.container, { paddingTop: insets.top }]}>
+      <View style={styles.header}>
+        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
+          <MaterialIcons name="arrow-back" size={24} color={C.text} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>閫夎绀惧尯</Text>
+        <View style={{ width: 40 }} />
+      </View>
+
+      <View style={styles.searchBar}>
+        <MaterialIcons name="search" size={20} color={C.textSec} style={{ marginRight: 8 }} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder="鎼滅储璇剧▼鍚嶇О/璇惧彿/鏁欏笀濮撳悕"
+          placeholderTextColor={C.textSec}
+          value={searchText}
+          onChangeText={text => {
+            setSearchText(text);
+            if (debounceRef.current) clearTimeout(debounceRef.current);
+            debounceRef.current = setTimeout(() => handleSearch(text), 300);
+          }}
+          returnKeyType="search"
+          autoCorrect={false}
+        />
+        {searchText.length > 0 && (
+          <TouchableOpacity onPress={() => { setSearchText(''); setStatus('idle'); setGroups([]); }}>
+            <MaterialIcons name="close" size={18} color={C.textSec} />
+          </TouchableOpacity>
+        )}
+      </View>
+
+      {status === 'idle' && (
+        <View style={styles.emptyState}>
+          <MaterialIcons name="forum" size={48} color="#DDD" />
+          <Text style={styles.emptyText}>鎼滅储璇剧▼鍚嶇О鏌ョ湅涓嶅悓鑰佸笀鐨勮瘎鍒嗗姣?/Text>
+          <Text style={styles.emptyHint}>鏀寔妯＄硦鎼滅储锛屼緥濡?鏁板鍒嗘瀽"銆?閫氶€?</Text>
+        </View>
+      )}
+
+      {status === 'loading' && (
+        <View style={styles.loadingState}>
+          <ActivityIndicator size="large" color={C.primary} />
+          <Text style={styles.loadingText}>姝ｅ湪鎼滅储...</Text>
+        </View>
+      )}
+
+      {status === 'error' && (
+        <View style={styles.emptyState}>
+          <MaterialIcons name="search-off" size={48} color="#DDD" />
+          <Text style={styles.emptyText}>{errorMsg}</Text>
+        </View>
+      )}
+
+      {status === 'success' && (
+        <>
+          <FlatList
+            ref={flatListRef}
+            data={groups}
+            renderItem={renderGroup}
+            keyExtractor={item => item.code}
+            contentContainerStyle={{ paddingBottom: 80 }}
+            showsVerticalScrollIndicator={false}
+            onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: false })}
+            scrollEventThrottle={16}
+            ListHeaderComponent={
+              <Text style={styles.resultCount}>
+                {(() => {
+                  const uniqueTeachers = new Set<string>();
+                  const realGroups = groups.filter(g => !g.isTeacherOverview);
+                  for (const g of realGroups) for (const t of g.teachers) uniqueTeachers.add(t.teacher);
+                  return `鎵惧埌 ${uniqueTeachers.size} 浣嶆暀甯?路 ${realGroups.length} 闂ㄨ`;
+                })()}
+              </Text>
+            }
+          />
+          {showScrollTop && (
+            <TouchableOpacity style={styles.scrollTopBtn} onPress={() => flatListRef.current?.scrollToOffset({ offset: 0, animated: true })} activeOpacity={0.8}>
+              <MaterialIcons name="keyboard-arrow-up" size={28} color="#FFF" />
+            </TouchableOpacity>
+          )}
+        </>
+      )}
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: C.bg },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: C.card, borderBottomWidth: 1, borderBottomColor: C.border },
+  backBtn: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' },
+  headerTitle: { fontSize: 16, fontWeight: '700', color: C.text },
+  searchBar: { flexDirection: 'row', alignItems: 'center', margin: 12, backgroundColor: C.card, borderRadius: 10, paddingHorizontal: 12, height: 40, borderWidth: 1, borderColor: C.border },
+  searchInput: { flex: 1, fontSize: 14, color: C.text, paddingVertical: 0 },
+  emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingBottom: 80 },
+  emptyText: { fontSize: 15, color: C.textSec, marginTop: 12 },
+  emptyHint: { fontSize: 13, color: '#BBB', marginTop: 6 },
+  loadingState: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingBottom: 80 },
+  loadingText: { fontSize: 14, color: C.textSec, marginTop: 12 },
+  resultCount: { fontSize: 13, color: C.textSec, paddingHorizontal: 12, paddingVertical: 8 },
+  group: { marginBottom: 0 },
+  groupHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, paddingHorizontal: 12, backgroundColor: C.card, borderBottomWidth: 1, borderBottomColor: C.border },
+  groupHeaderTeacher: { backgroundColor: C.primaryLight },
+  groupHeaderLeft: { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  code: { fontSize: 13, fontWeight: '700', color: C.primary, marginRight: 6 },
+  name: { fontSize: 13, color: C.text, flex: 1 },
+  teacherCount: { fontSize: 12, color: C.textSec, marginLeft: 8 },
+  teacherList: { backgroundColor: C.card, paddingHorizontal: 12, paddingBottom: 8 },
+  teacherOverviewBanner: { backgroundColor: C.primaryLight, borderRadius: 8, padding: 12, marginBottom: 8 },
+  overviewRow: { flexDirection: 'row', alignItems: 'center' },
+  overviewTitle: { fontSize: 14, fontWeight: '700', color: C.text },
+  overviewRating: { fontSize: 16, fontWeight: '700', color: C.star, marginTop: 2 },
+  overviewSub: { fontSize: 12, color: C.textSec, marginTop: 2 },
+  overviewDivider: { fontSize: 12, fontWeight: '600', color: C.textSec, marginTop: 10, paddingTop: 8, borderTopWidth: 1, borderTopColor: C.border },
+  credBadge: { borderRadius: 8, borderWidth: 1, paddingHorizontal: 8, paddingVertical: 4 },
+  credText: { fontSize: 11, fontWeight: '700' },
+  teacherCard: { backgroundColor: '#FAFAFA', borderRadius: 8, padding: 10, marginBottom: 6 },
+  teacherRow: { flexDirection: 'row', alignItems: 'center' },
+  courseCodeSmall: { fontSize: 11, fontWeight: '600', color: C.primary, marginRight: 6 },
+  teacherName: { fontSize: 14, fontWeight: '600', color: C.text },
+  teacherRating: { fontSize: 13, color: C.star },
+  teacherReviewsCount: { fontSize: 12, color: C.textSec, marginLeft: 6 },
+  reviewsContainer: { marginTop: 8, borderTopWidth: 1, borderTopColor: C.border, paddingTop: 8 },
+  reviewCard: { backgroundColor: C.card, borderRadius: 6, padding: 8, marginBottom: 6, borderWidth: 1, borderColor: C.border },
+  reviewHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  reviewSemester: { fontSize: 11, color: C.textSec },
+  reviewRating: { fontSize: 12, color: C.star },
+  moreReviews: { fontSize: 12, color: C.primary, textAlign: 'center', marginTop: 4 },
+  scrollTopBtn: { position: 'absolute', bottom: 20, right: 20, width: 44, height: 44, borderRadius: 22, backgroundColor: C.primary, justifyContent: 'center', alignItems: 'center', elevation: 4 },
+  csub: { fontSize: 12, color: C.textSec },
+});
+
+const mdStyles = { body: { fontSize: 13, color: C.text, lineHeight: 18 }, p: { marginVertical: 0 } } as any;
+
+===FILE_END===
