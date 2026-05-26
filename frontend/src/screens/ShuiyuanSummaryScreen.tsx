@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView,
-  ActivityIndicator, Image, Platform, Dimensions
+  ActivityIndicator, Image, Dimensions
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
@@ -9,8 +9,14 @@ import ViewShot from 'react-native-view-shot';
 import * as MediaLibrary from 'expo-media-library';
 import { File, Paths } from 'expo-file-system';
 import { useFonts } from 'expo-font';
-import piexifjs from 'piexifjs';
 import { SvgXml } from 'react-native-svg';
+import UPNG from 'upng-js';
+import {
+  generateWatermarkLetters,
+  generateWatermarkMask,
+  embedLSB,
+  perturbPngMetadata,
+} from '../utils/watermark';
 import { AlertModal, useAlertModal } from '../components/AlertModal';
 import { SHUIYUAN_LOGO_SVG } from '../utils/shuiyuanLogo';
 import { getShuiyuanTopic, ShuiyuanTopic, buildAvatarUrl } from '../api/shuiyuan';
@@ -22,7 +28,6 @@ const C = {
   primary: '#0055A8', border: '#EEE', link: '#1565C0',
 };
 
-/** 简单剥离 HTML 标签，保留换行 */
 function htmlToText(html: string): string {
   return html
     .replace(/<br\s*\/?>/gi, '\n')
@@ -39,7 +44,6 @@ function htmlToText(html: string): string {
     .trim();
 }
 
-/** 从 URL 中提取 topic ID 和可选的帖子编号 */
 function parseShuiyuanUrl(url: string): { topicId: number | null; postNumber?: number } {
   const m = url.match(/shuiyuan\.sjtu\.edu\.cn\/t\/topic\/(\d+)(?:\/(\d+))?/);
   if (!m) return { topicId: null };
@@ -47,14 +51,6 @@ function parseShuiyuanUrl(url: string): { topicId: number | null; postNumber?: n
     topicId: parseInt(m[1], 10),
     postNumber: m[2] ? parseInt(m[2], 10) : undefined,
   };
-}
-
-/** 经纬度转 EXIF GPS DMS 格式（度/分/秒 有理数对数组） */
-function dms(dec: number): [number, number][] {
-  const d = Math.floor(dec);
-  const m = Math.floor((dec - d) * 60);
-  const s = Math.round(((dec - d) * 60 - m) * 100);
-  return [[d, 1], [m, 1], [s, 100]];
 }
 
 export const ShuiyuanSummaryScreen = ({ navigation }: any) => {
@@ -89,12 +85,9 @@ export const ShuiyuanSummaryScreen = ({ navigation }: any) => {
     const result = await getShuiyuanTopic(parsed.topicId);
     setLoading(false);
     if (result) {
-      // 根据 URL 中的帖子编号过滤
       if (parsed.postNumber) {
-        // /t/topic/xxx/n → 只显示指定帖
         result.posts = result.posts.filter(p => p.postNumber === parsed.postNumber);
       } else {
-        // /t/topic/xxx → 只显示楼主
         result.posts = result.posts.filter(p => p.postNumber === 1);
       }
       setTopic(result);
@@ -111,53 +104,58 @@ export const ShuiyuanSummaryScreen = ({ navigation }: any) => {
     }
     setSaving(true);
     try {
+      // 1. 拦截主内容视图长图
       const uri = await viewShotRef.current?.capture?.();
       if (!uri) throw new Error('截图失败');
 
-      // === 注入虚假 EXIF（拍摄地点、设备、时间） ===
-      const srcFile = new File(uri);
-      const jpegB64 = await srcFile.base64();
+      // 2. 将长图转为二进制 RGBA 数据
+      const pngFile = new File(uri);
+      const pngB64 = await pngFile.base64();
 
-      // 生成随机 GPS 坐标（上海市内）
-      const lat = 31.2 + Math.random() * 0.3;
-      const lng = 121.4 + Math.random() * 0.2;
-      const fakeModels = ['iPhone 14 Pro', 'iPhone 15 Pro Max', 'SM-S918B', 'Pixel 8 Pro', 'Xiaomi 14 Ultra', 'OPPO Find X7'];
-      const model = fakeModels[Math.floor(Math.random() * fakeModels.length)];
-      const fakeTime = new Date(Date.now() - Math.random() * 7 * 24 * 3600 * 1000);
-      const timeStr = fakeTime.toISOString().replace(/[TZ]/g, ' ').substring(0, 19);
+      const pngBinaryStr = atob(pngB64);
+      const pngLen = pngBinaryStr.length;
+      const pngBuf = new Uint8Array(pngLen);
+      for (let i = 0; i < pngLen; i++) pngBuf[i] = pngBinaryStr.charCodeAt(i);
 
-      const exifObj: any = {
-        '0th': {
-          [piexifjs.ImageIFD.Make]: 'Apple Inc.',
-          [piexifjs.ImageIFD.Model]: model,
-          [piexifjs.ImageIFD.Software]: 'Adobe Lightroom 7.5',
-        },
-        Exif: {
-          [piexifjs.ExifIFD.DateTimeOriginal]: timeStr,
-          [piexifjs.ExifIFD.LensModel]: 'iPhone camera 6.86mm f/1.78',
-          [piexifjs.ExifIFD.FNumber]: [14, 10],
-          [piexifjs.ExifIFD.ExposureTime]: [1, Math.floor(Math.random() * 500 + 50)],
-          [piexifjs.ExifIFD.ISOSpeedRatings]: Math.floor(Math.random() * 400 + 50),
-        },
-        GPS: {
-          [piexifjs.GPSIFD.GPSLatitudeRef]: 'N',
-          [piexifjs.GPSIFD.GPSLatitude]: dms(lat),
-          [piexifjs.GPSIFD.GPSLongitudeRef]: 'E',
-          [piexifjs.GPSIFD.GPSLongitude]: dms(lng),
-        },
-      };
+      const decoded = UPNG.decode(pngBuf.buffer);
+      const w = decoded.width;
+      const h = decoded.height;
+      const rgbaBufs = UPNG.toRGBA8(decoded);
+      const rgba = new Uint8Array(rgbaBufs[0]);
 
-      // base64 → binary string → insert EXIF → write as base64
-      const binStr = atob(jpegB64);
-      const withExifBin = piexifjs.insert(piexifjs.dump(exifObj), binStr);
-      const withExifB64 = btoa(withExifBin);
+      // 3. 内存级直接计算出水印掩码 (100% 稳定，不再有 UI 渲染时差)
+      const letters = generateWatermarkLetters();
+      const mask = generateWatermarkMask(w, h, letters);
+      
+      // 4. 高速嵌入 LSB
+      embedLSB(rgba, mask);
 
-      // 写入临时文件并保存到相册
-      const randName = `IMG_${Date.now()}.jpg`;
+      // 5. 重新拼装 PNG，注入伪造 EXIF 拍摄元数据
+      const outBuf = UPNG.encode([rgba.buffer], w, h);
+      let outBytes: Uint8Array = new Uint8Array(outBuf);
+      outBytes = perturbPngMetadata(outBytes as Uint8Array);
+
+      // 6. 还原为 base64
+      let outB64 = '';
+      const CHUNK = 8192;
+      for (let i = 0; i < outBytes.length; i += CHUNK) {
+        const end = Math.min(i + CHUNK, outBytes.length);
+        const slice = outBytes.subarray(i, end);
+        let chunkStr = '';
+        for (let j = 0; j < slice.length; j++) {
+          chunkStr += String.fromCharCode(slice[j]);
+        }
+        outB64 += chunkStr;
+      }
+      outB64 = btoa(outB64);
+
+      // 7. 保存落盘并写入相册
+      const randName = `Shuiyuan_${Date.now()}.png`;
       const tmp = new File(Paths.cache, randName);
-      tmp.write(withExifB64, { encoding: 'base64' });
+      tmp.write(outB64, { encoding: 'base64' });
       await MediaLibrary.createAssetAsync(tmp.uri);
-      showAlert({ title: '保存成功', message: '图片已保存到系统相册', icon: 'check-circle', iconColor: '#43A047', simple: true });
+
+      showAlert({ title: '保存成功', message: `图片已保存（隐写暗号: ${letters}）`, icon: 'check-circle', iconColor: '#43A047', simple: true });
     } catch (e: any) {
       showAlert({ title: '保存失败', message: e?.message || '请检查相册权限设置', icon: 'error-outline', iconColor: '#E53935', simple: true });
     } finally {
@@ -174,7 +172,6 @@ export const ShuiyuanSummaryScreen = ({ navigation }: any) => {
 
     return (
       <View key={post.id} style={[styles.postCard, index > 0 && { marginTop: 4 }]}>
-        {/* 用户信息行 */}
         <View style={styles.userRow}>
           {avatarUrl ? (
             <Image source={{ uri: avatarUrl }} style={styles.avatar} />
@@ -191,12 +188,10 @@ export const ShuiyuanSummaryScreen = ({ navigation }: any) => {
           </View>
         </View>
 
-        {/* 帖子内容 */}
         <View style={styles.contentWrap}>
           <Text style={[styles.postContent, { fontFamily }]}>{htmlToText(post.cooked)}</Text>
         </View>
 
-        {/* 互动信息 */}
         <View style={styles.statsRow}>
           <View style={styles.statItem}>
             <MaterialIcons name="visibility" size={14} color={C.textSec} />
@@ -221,7 +216,6 @@ export const ShuiyuanSummaryScreen = ({ navigation }: any) => {
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
-      {/* 头部 */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} activeOpacity={0.7}>
           <MaterialIcons name="arrow-back" size={24} color={C.text} />
@@ -230,7 +224,6 @@ export const ShuiyuanSummaryScreen = ({ navigation }: any) => {
         <View style={{ width: 40 }} />
       </View>
 
-      {/* 输入区 */}
       <View style={styles.inputArea}>
         <View style={styles.inputRow}>
           <MaterialIcons name="link" size={18} color={C.textSec} style={{ marginRight: 8 }} />
@@ -260,7 +253,6 @@ export const ShuiyuanSummaryScreen = ({ navigation }: any) => {
         </TouchableOpacity>
       </View>
 
-      {/* 错误提示 */}
       {error ? (
         <View style={styles.errorBox}>
           <MaterialIcons name="error-outline" size={18} color="#E53935" />
@@ -268,22 +260,17 @@ export const ShuiyuanSummaryScreen = ({ navigation }: any) => {
         </View>
       ) : null}
 
-      {/* 内容区 */}
       {topic ? (
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: insets.bottom + 100 }}>
-          {/* 可截图区域 */}
-          <ViewShot ref={viewShotRef} options={{ format: 'jpg', quality: 0.95 }} style={styles.shotContainer}>
-            {/* 品牌标头 */}
+          <ViewShot ref={viewShotRef} options={{ format: 'png' }} style={styles.shotContainer}>
             <View style={styles.brandHeader}>
               <View style={styles.brandRow}>
                 <SvgXml xml={SHUIYUAN_LOGO_SVG} width={160} height={38} />
               </View>
             </View>
 
-            {/* 话题标题 */}
             <Text style={{ fontSize: 18, color: C.text, marginBottom: -18, fontFamily: 'SourceHanSans-Bold' }}>{topic.title}</Text>
 
-            {/* 话题元信息 */}
             <View style={styles.topicMeta}>
               <View style={styles.metaItem}>
                 <MaterialIcons name="article" size={14} color={C.textSec} />
@@ -295,13 +282,11 @@ export const ShuiyuanSummaryScreen = ({ navigation }: any) => {
               </View>
             </View>
 
-            {/* 帖子列表 */}
             <View style={styles.postsList}>
               {topic.posts.map((post, i) => renderPost(post, i))}
             </View>
           </ViewShot>
 
-          {/* 保存按钮 */}
           <TouchableOpacity
             style={[styles.saveBtn, saving && { opacity: 0.6 }]}
             onPress={handleSave}
@@ -364,6 +349,7 @@ const styles = StyleSheet.create({
 
   postsList: {},
   postCard: { paddingVertical: 8 },
+  postDivider: { height: 1, backgroundColor: '#EEE', marginTop: 8 },
   userRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
   avatar: { width: 36, height: 36, borderRadius: 18 },
   avatarPlaceholder: { backgroundColor: C.primary, justifyContent: 'center', alignItems: 'center' },
@@ -375,8 +361,6 @@ const styles = StyleSheet.create({
   statsRow: { flexDirection: 'row', gap: 14, marginTop: 4 },
   statItem: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   statText: { fontSize: 11, color: C.textSec },
-
-  footer: { marginTop: 12 },
 
   saveBtn: {
     flexDirection: 'row', backgroundColor: '#43A047', borderRadius: 10, paddingVertical: 12,

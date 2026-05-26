@@ -25,6 +25,7 @@ import { SectionOrderScreen } from '../screens/SectionOrderScreen';
 import { AlgorithmHelpScreen } from '../screens/AlgorithmHelpScreen';
 import { FavoritesScreen } from '../screens/FavoritesScreen';
 import { ShuiyuanSummaryScreen } from '../screens/ShuiyuanSummaryScreen';
+import { WatermarkDebugScreen } from '../screens/WatermarkDebugScreen';
 import { ActivityIndicator, View } from 'react-native';
 
 const Stack = createNativeStackNavigator();
@@ -145,6 +146,10 @@ export const AppNavigator = () => {
         <Stack.Screen 
           name="ShuiyuanSummary" 
           component={ShuiyuanSummaryScreen} 
+        />
+        <Stack.Screen 
+          name="WatermarkDebug" 
+          component={WatermarkDebugScreen} 
         />
         <Stack.Screen 
           name="RenderTest" 

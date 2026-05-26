@@ -31,6 +31,7 @@ const SETTING_ICON_COLORS: Record<string, string> = {
   semesterDebug: '#E65100',
   version: '#90A4AE',
   shuiyuanSummary: '#1565C0',
+  watermarkDebug: '#7B1FA2',
 };
 
 const getSettingsSections = (devModeEnabled: boolean) => [
@@ -96,7 +97,10 @@ const getDevSections = (devModeEnabled: boolean, topSecretEnabled: boolean) => {
       title: '绝密功能',
       items: [
         { key: 'topSecretFeature', icon: 'verified', label: '绝密功能', desc: '设备验证后开启' },
-        ...(topSecretEnabled ? [{ key: 'shuiyuanSummary', icon: 'article', label: '水源帖子摘要', desc: 'AI 摘要生成' }] : []),
+        ...(topSecretEnabled ? [
+          { key: 'shuiyuanSummary', icon: 'article', label: '水源帖子摘要', desc: 'AI 摘要生成' },
+          { key: 'watermarkDebug', icon: 'bug-report', label: '水印明文调试', desc: '1000×2000 明文水印效果' },
+        ] : []),
       ],
     });
   }
@@ -486,6 +490,10 @@ export const SettingsScreen = ({ navigation }: any) => {
     }
     if (key === 'shuiyuanSummary') {
       navigation.navigate('ShuiyuanSummary');
+      return;
+    }
+    if (key === 'watermarkDebug') {
+      navigation.navigate('WatermarkDebug');
       return;
     }
     if (key === 'topSecretFeature') {
