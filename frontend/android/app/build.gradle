@@ -92,8 +92,8 @@ android {
         applicationId 'com.anonymous.frontend'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.1.4"
+        versionCode 10
+        versionName "1.2.0"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
 
@@ -117,6 +117,7 @@ android {
     }
     buildTypes {
         debug {
+            applicationIdSuffix '.debug'
             signingConfig signingConfigs.debug
         }
         release {
