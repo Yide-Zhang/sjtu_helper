@@ -44,6 +44,7 @@ export const sectionStyles = StyleSheet.create({
   guideText: {
     fontSize: 13,
     color: '#FF8C00',
+    flexShrink: 1,
   },
   // 课表
   scheduleRow: {
