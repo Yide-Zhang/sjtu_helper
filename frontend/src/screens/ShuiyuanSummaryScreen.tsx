@@ -18,6 +18,7 @@ import {
   perturbPngMetadata,
 } from '../utils/watermark';
 import { AlertModal, useAlertModal } from '../components/AlertModal';
+import { LatexBlock } from '../components/LatexBlock';
 import { SHUIYUAN_LOGO_SVG } from '../utils/shuiyuanLogo';
 import { getShuiyuanTopic, ShuiyuanTopic, buildAvatarUrl } from '../api/shuiyuan';
 
@@ -27,22 +28,6 @@ const C = {
   bg: '#F5F5F5', card: '#FFF', text: '#333', textSec: '#888',
   primary: '#0055A8', border: '#EEE', link: '#1565C0',
 };
-
-function htmlToText(html: string): string {
-  return html
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n\n')
-    .replace(/<\/div>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
 
 function parseShuiyuanUrl(url: string): { topicId: number | null; postNumber?: number } {
   const m = url.match(/shuiyuan\.sjtu\.edu\.cn\/t\/topic\/(\d+)(?:\/(\d+))?/);
@@ -71,6 +56,242 @@ export const ShuiyuanSummaryScreen = ({ navigation }: any) => {
 
   const fontFamily = fontsLoaded ? 'SourceHanSans' : undefined;
   const fontFamilyBold = fontsLoaded ? 'SourceHanSans-Bold' : undefined;
+
+/**
+ * 渲染 <div class="md-table"> 中的表格为 flex 布局
+ */
+function renderMdTable(tableHtml: string, fontF: string | undefined, fontBold: string | undefined, key: string): React.ReactNode {
+  // 提取所有行 (<tr>)
+  const rows: { cells: string[]; isHeader: boolean }[] = [];
+  const trRe = /<tr>([\s\S]*?)<\/tr>/gi;
+  let trMatch: RegExpExecArray | null;
+  while ((trMatch = trRe.exec(tableHtml)) !== null) {
+    const trContent = trMatch[1];
+    const cells: string[] = [];
+    // 提取 <th> 或 <td> 内容
+    const cellRe = /<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi;
+    let cellMatch: RegExpExecArray | null;
+    while ((cellMatch = cellRe.exec(trContent)) !== null) {
+      let content = cellMatch[1]
+        .replace(/<[^>]+>/g, '')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .trim();
+      cells.push(content);
+    }
+    if (cells.length > 0) {
+      // <th> 开头的行为表头
+      const isHeader = /<th/i.test(trContent);
+      rows.push({ cells, isHeader });
+    }
+  }
+  if (rows.length === 0) return null;
+
+  const borderColor = '#CCC';
+  return (
+    <View key={key} style={{ marginVertical: 6, borderWidth: 1, borderColor, borderRadius: 6, overflow: 'hidden' }}>
+      {rows.map((row, ri) => (
+        <View
+          key={`${key}-r-${ri}`}
+          style={{
+            flexDirection: 'row',
+            backgroundColor: row.isHeader ? '#F0F4F8' : 'transparent',
+            borderBottomWidth: ri < rows.length - 1 ? 1 : 0,
+            borderBottomColor: borderColor,
+          }}
+        >
+          {row.cells.map((cell, ci) => (
+            <Text
+              key={`${key}-c-${ri}-${ci}`}
+              style={{
+                flex: 1,
+                fontFamily: row.isHeader ? fontBold || fontF : fontF,
+                fontSize: 14,
+                color: '#333',
+                lineHeight: 22,
+                paddingVertical: 4,
+                paddingHorizontal: 8,
+                borderRightWidth: ci < row.cells.length - 1 ? 1 : 0,
+                borderRightColor: borderColor,
+              }}
+            >
+              {cell}
+            </Text>
+          ))}
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/**
+ * 轻量 HTML 渲染：把所有文本合并到单个 Text 组件，
+ * 消除了多 Text 组件堆叠产生的间距问题。
+ */
+function renderHtml(html: string, fontF: string | undefined, fontBold: string | undefined, prefix: string): React.ReactNode[] {
+  const nodes: React.ReactNode[] = [];
+
+  // 按块级元素分割：<img>、<div class="math">、<div class="md-table...">
+  const segments = html.split(/(<img[^>]*>|<div\s+class="math"[^>]*>[\s\S]*?<\/div>|<div\s+class="md-table[^"]*"[^>]*>[\s\S]*?<\/table>[\s\S]*?<\/div>)/gi);
+
+  for (let si = 0; si < segments.length; si++) {
+    const seg = segments[si];
+
+    // ---- 图片 ----
+    if (/^<img\s/i.test(seg)) {
+      if (/\bemoji\b/i.test(seg) || /\bavatar\b/i.test(seg)) continue;
+      const wm = seg.match(/width\s*=\s*["'](\d+)["']/i);
+      const hm = seg.match(/height\s*=\s*["'](\d+)["']/i);
+      if (wm && hm && parseInt(wm[1]) < 30 && parseInt(hm[1]) < 30) continue;
+      let src = seg.match(/src\s*=\s*["']([^"']+)["']/i)?.[1] || '';
+      if (src.startsWith('//')) src = 'https:' + src;
+      else if (src.startsWith('/')) src = 'https://shuiyuan.sjtu.edu.cn' + src;
+      if (src) nodes.push(
+        <Image key={`${prefix}img-${si}`} source={{ uri: src }} style={styles.postImage} resizeMode="contain" />
+      );
+      continue;
+    }
+
+    // ---- 行间公式 ----
+    const dispM = seg.match(/^<div\s+class="math"[^>]*>([\s\S]*)<\/div>$/i);
+    if (dispM) {
+      const latex = dispM[1].trim().replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+      if (latex) nodes.push(<LatexBlock key={`${prefix}m-${si}`} latex={latex} display />);
+      continue;
+    }
+
+    // ---- 表格 (md-table) ----
+    const tableM = seg.match(/^<div\s+class="md-table[^"]*"[^>]*>[\s\S]*?<table>([\s\S]*?)<\/table>[\s\S]*<\/div>$/i);
+    if (tableM) {
+      const renderedTable = renderMdTable(tableM[1], fontF, fontBold, `${prefix}table-${si}`);
+      if (renderedTable) nodes.push(renderedTable);
+      continue;
+    }
+
+    // ---- 文本段 ----
+    // 行内公式 → $...$ 文本，然后统一剥离标签
+    let text = seg
+      .replace(/<span\s+class="math"[^>]*>([\s\S]*?)<\/span>/gi, (_, latex) => {
+        const clean = latex.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").trim();
+        return '$' + clean + '$';
+      })
+      .replace(/<h([1-3])[^>]*>/gi, '\n【h$1】')
+      .replace(/<\/h[1-3]>/gi, '【/h】\n')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/table>/gi, '\n')
+      .replace(/<\/tr>/gi, '\n')
+      .replace(/<\/td>/gi, '\t')
+      .replace(/<\/th>/gi, '\t')
+      .replace(/<\/p>/gi, '\n')
+      .replace(/<\/div>/gi, '\n')
+      .replace(/<figcaption>[^<]*<\/figcaption>/gi, '')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+
+    if (!text) continue;
+
+    const lines = text.split('\n');
+    for (let li = 0; li < lines.length; li++) {
+      const line = lines[li].trim();
+      if (!line) continue;
+      const hM = line.match(/^【h([1-3])】(.+?)【\/h】$/);
+      if (hM) {
+        const level = parseInt(hM[1]);
+        const sizes = [20, 18, 16];
+        nodes.push(
+          <Text key={`${prefix}h-${si}-${li}`} style={{ fontFamily: fontBold || fontF, fontSize: sizes[level - 1] || 18, color: '#222', lineHeight: sizes[level - 1] + 8, marginBottom: 4 }}>{hM[2].trim()}</Text>
+        );
+      } else if (line.includes('\t')) {
+        // 表格行 → flex row 多列
+        const cells = line.split('\t').filter(c => c.trim());
+        if (cells.length > 1) {
+          nodes.push(
+            <View key={`${prefix}tr-${si}-${li}`} style={{ flexDirection: 'row', marginBottom: 4 }}>
+              {cells.map((cell, ci) => (
+                <Text key={`${prefix}td-${si}-${li}-${ci}`} style={[styles.postContent, { fontFamily: fontF, flex: 1 }]}>{cell.trim()}</Text>
+              ))}
+            </View>
+          );
+        } else {
+          nodes.push(
+            <Text key={`${prefix}t-${si}-${li}`} style={[styles.postContent, { fontFamily: fontF, marginBottom: 5 }]}>{line}</Text>
+          );
+        }
+      } else {
+        nodes.push(
+          <Text key={`${prefix}t-${si}-${li}`} style={[styles.postContent, { fontFamily: fontF, marginBottom: 5 }]}>{line}</Text>
+        );
+      }
+    }
+  }
+
+  return nodes;
+}
+
+  /** 渲染帖子内容（文字 + 图片 + details 区块） */
+  const renderContent = (cooked: string) => {
+    const parts: { type: 'text' | 'details'; html: string }[] = [];
+    let lastEnd = 0;
+    const detRe = /<details[^>]*>[\s\S]*?<\/details>/gi;
+    let detMatch: RegExpExecArray | null;
+    while ((detMatch = detRe.exec(cooked)) !== null) {
+      if (detMatch.index > lastEnd) {
+        parts.push({ type: 'text', html: cooked.slice(lastEnd, detMatch.index) });
+      }
+      parts.push({ type: 'details', html: detMatch[0] });
+      lastEnd = detMatch.index + detMatch[0].length;
+    }
+    if (lastEnd < cooked.length) {
+      parts.push({ type: 'text', html: cooked.slice(lastEnd) });
+    }
+
+    const segments: React.ReactNode[] = [];
+    let segIdx = 0;
+
+    for (const part of parts) {
+      if (part.type === 'text') {
+        const rendered = renderHtml(part.html, fontFamily, fontFamilyBold, `t-${segIdx}-`);
+        segments.push(...rendered);
+        segIdx++;
+      } else {
+        const sumMatch = part.html.match(/<summary>[\s\S]*?<\/summary>/i);
+        let summaryText = '';
+        if (sumMatch) {
+          summaryText = sumMatch[0].replace(/<\/?[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').trim();
+        }
+        const bodyHtml = part.html
+          .replace(/<summary>[\s\S]*?<\/summary>/i, '')
+          .replace(/<\/?details[^>]*>/gi, '');
+        const bodyNodes = renderHtml(bodyHtml, fontFamily, fontFamilyBold, `d-${segIdx}-`);
+
+        segments.push(
+          <View key={`det-${segIdx++}`} style={styles.detailsBlock}>
+            <View style={styles.detailsSummary}>
+              <Text style={[styles.detailsSummaryText, { fontFamily: fontFamilyBold }]}>{summaryText}</Text>
+              <MaterialIcons name="expand-more" size={18} color="#FFF" />
+            </View>
+            {bodyNodes.length > 0 ? (
+              <View style={styles.detailsBody}>{bodyNodes}</View>
+            ) : null}
+          </View>
+        );
+      }
+    }
+
+    if (segments.length === 0) return null;
+    return <>{segments}</>;
+  };
 
   const handleFetch = async () => {
     const parsed = parseShuiyuanUrl(url.trim());
@@ -189,7 +410,7 @@ export const ShuiyuanSummaryScreen = ({ navigation }: any) => {
         </View>
 
         <View style={styles.contentWrap}>
-          <Text style={[styles.postContent, { fontFamily }]}>{htmlToText(post.cooked)}</Text>
+          {renderContent(post.cooked)}
         </View>
 
         <View style={styles.statsRow}>
@@ -358,6 +579,14 @@ const styles = StyleSheet.create({
 
   contentWrap: { marginBottom: 8 },
   postContent: { fontSize: 14, color: C.text, lineHeight: 22 },
+  postImage: { width: '100%', height: 200, borderRadius: 8, marginTop: 8, backgroundColor: '#F0F0F0' },
+  detailsBlock: { marginTop: 8, borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: '#E0E0E0' },
+  detailsSummary: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: '#0055A8', paddingHorizontal: 12, paddingVertical: 3,
+  },
+  detailsSummaryText: { fontSize: 14, color: '#FFF', flex: 1 },
+  detailsBody: { padding: 10, paddingHorizontal: 12, backgroundColor: '#F8F9FA' },
   statsRow: { flexDirection: 'row', gap: 14, marginTop: 4 },
   statItem: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   statText: { fontSize: 11, color: C.textSec },

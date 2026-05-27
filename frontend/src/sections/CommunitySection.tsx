@@ -2,8 +2,12 @@ import React, { useState, useCallback } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
-import { getRecentReviews, ReviewWithCourse } from '../api/courseCommunity';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getRecentReviews, loginCommunity, ReviewWithCourse } from '../api/courseCommunity';
+import { getJAccountUsername, getCommunityPassword } from '../utils/storage';
 import { sectionStyles as s } from './sectionStyles';
+
+const CACHE_KEY = 'COMMUNITY_SECTION_CACHE';
 
 interface Props {
   navigation: any;
@@ -43,21 +47,84 @@ const renderStars = (r: number) => {
 export const CommunitySection: React.FC<Props> = ({ navigation }) => {
   const [reviews, setReviews] = useState<ReviewWithCourse[]>([]);
   const [loading, setLoading] = useState(true);
+  const [hasCreds, setHasCreds] = useState<boolean | null>(null);
 
   useFocusEffect(useCallback(() => {
     let cancelled = false;
-    setLoading(true);
+
     (async () => {
+      // 0. 检查凭据
+      const jUser = await getJAccountUsername();
+      const cPwd = await getCommunityPassword();
+      const credsOk = !!(jUser && cPwd);
+      if (cancelled) return;
+      setHasCreds(credsOk);
+      if (!credsOk) {
+        setLoading(false);
+        return;
+      }
+
+      // 1. 先读缓存
       try {
-        const data = await getRecentReviews(2);
-        if (!cancelled) setReviews(data);
+        const cachedJson = await AsyncStorage.getItem(CACHE_KEY);
+        if (cachedJson && !cancelled) {
+          const parsed = JSON.parse(cachedJson) as ReviewWithCourse[];
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setReviews(parsed);
+            setLoading(false);
+          }
+        }
+      } catch {}
+
+      // 2. 取网络数据
+      try {
+        let data = await getRecentReviews(2);
+        // 如果没取到，尝试重新登陆后再取一次（会话过期场景）
+        if (!data || data.length === 0) {
+          const relogged = await loginCommunity();
+          if (relogged) {
+            data = await getRecentReviews(2);
+          }
+        }
+        if (cancelled) return;
+
+        if (data && data.length > 0) {
+          setReviews(data);
+          const cachedJson = await AsyncStorage.getItem(CACHE_KEY);
+          const cached = cachedJson ? JSON.parse(cachedJson) as ReviewWithCourse[] : null;
+          const changed = !cached || JSON.stringify(cached) !== JSON.stringify(data);
+          if (changed) {
+            await AsyncStorage.setItem(CACHE_KEY, JSON.stringify(data));
+          }
+        }
       } catch (e) {
         console.warn('[CommunitySection] 加载失败:', e);
       }
       if (!cancelled) setLoading(false);
     })();
+
     return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []));
+
+  // 未设置凭据 → 引导
+  if (hasCreds === false) {
+    return (
+      <TouchableOpacity style={s.section} onPress={() => navigation.navigate('Settings')} activeOpacity={0.7}>
+        <View style={s.sectionHeader}>
+          <MaterialIcons name="forum" size={16} color="#0055A8" />
+          <Text style={s.sectionTitle}>选课社区</Text>
+          <MaterialIcons name="chevron-right" size={18} color="#999" style={{ marginLeft: 'auto' }} />
+        </View>
+        <View style={s.sectionCard}>
+          <View style={s.guideRow}>
+            <MaterialIcons name="info-outline" size={14} color="#FF8C00" style={{ marginRight: 4 }} />
+            <Text style={s.guideText}>未设置选课社区凭据，前去填写</Text>
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
+  }
 
   return (
     <TouchableOpacity style={s.section} onPress={() => navigation.navigate('CommunityReview')} activeOpacity={0.7}>
